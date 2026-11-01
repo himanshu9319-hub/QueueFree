@@ -7,8 +7,8 @@ describe('hospital and queue helpers', () => {
   it('provides location data and stable keys for sample hospitals', () => {
     expect(initialHospitals.length).toBeGreaterThan(0)
     expect(initialHospitals[0].latitude).toBe(initialHospitals[0].lat)
-    expect(hospitalKey(initialHospitals[0])).toBe('Bengaluru::Apollo Hospitals')
-    expect(opdKey(initialHospitals[0], 'Cardiology')).toBe('Bengaluru::Apollo Hospitals::Cardiology')
+    expect(hospitalKey(initialHospitals[0])).toBe(`${initialHospitals[0].city}::${initialHospitals[0].name}`)
+    expect(opdKey(initialHospitals[0], 'Cardiology')).toBe(`${initialHospitals[0].city}::${initialHospitals[0].name}::Cardiology`)
   })
 
   it('provides navigation icons and department doctors', () => {
@@ -53,5 +53,14 @@ describe('hospital and queue helpers', () => {
     expect(deriveNameFromEmail('ananya@example.com')).toBe('Ananya')
     expect(deriveNameFromEmail('rajesh123@hospital.org')).toBe('Rajesh')
     expect(deriveNameFromEmail('', 'Fallback User')).toBe('Fallback User')
+  })
+
+  it('exports official ABDM and ABHA auth helper functions in queueApi', async () => {
+    const api = await import('./queueApi.js')
+    expect(typeof api.initiateAbhaAuth).toBe('function')
+    expect(typeof api.confirmAbhaAuth).toBe('function')
+    expect(typeof api.cancelAbhaAuth).toBe('function')
+    expect(typeof api.registerPatient).toBe('function')
+    expect(typeof api.getPatientProfile).toBe('function')
   })
 })

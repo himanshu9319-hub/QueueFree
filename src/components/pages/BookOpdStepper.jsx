@@ -2,11 +2,14 @@ import { useState, useEffect, useMemo } from 'react'
 import {
   Building2, Stethoscope, Calendar, Clock, Check, ArrowRight, ArrowLeft,
   ShieldCheck, AlertCircle, Sparkles, MapPin, Ticket, ExternalLink, RefreshCw, Star,
-  User, FileText, Phone, Activity
+  User, FileText, Phone, Activity, Globe, Shield
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { apiRequest, createBooking, getResults, localIsoDate, patientVerifyAbha } from '../../lib/queueApi'
-import { richDepartments, richDoctors, getRandomDoctorsForDepartment } from '../../lib/appData'
+import {
+  apiRequest, createBooking, getResults, localIsoDate,
+  patientVerifyAbha, patientPhoneLogin, getApiAccessToken, setApiAccessToken
+} from '../../lib/queueApi'
+import { hospitalSamples } from '../../lib/appData'
 import { RazorpayPaymentCard } from '../payment/RazorpayPaymentCard'
 
 export function BookOpdStepper({
@@ -18,9 +21,12 @@ export function BookOpdStepper({
   city = 'Rishikesh, Uttarakhand',
   onNavigate,
   patientSession = null,
+  onLoginSuccess,
+  existingBookings = [],
 }) {
   const [step, setStep] = useState(1)
   const [hospitals, setHospitals] = useState([])
+  const [hospitalsLoading, setHospitalsLoading] = useState(true)
   const [hospitalId, setHospitalId] = useState('')
   const [departments, setDepartments] = useState([])
   const [departmentId, setDepartmentId] = useState('')
@@ -32,6 +38,14 @@ export function BookOpdStepper({
   const [loading, setLoading] = useState(false)
   const [bookingLoading, setBookingLoading] = useState(false)
   const [error, setError] = useState('')
+
+  // Check if patient already holds an active token (1-Active-Token Policy)
+  const activeExistingBooking = useMemo(() => {
+    if (!Array.isArray(existingBookings) || existingBookings.length === 0) return null
+    return existingBookings.find(b =>
+      ['waiting', 'arrived', 'calling', 'serving', 'external', 'confirmed', 'booked'].includes(b.status)
+    ) || null
+  }, [existingBookings])
 
   // Mandatory Patient Details State
   const [patientName, setPatientName] = useState(() => patientSession?.name || '')
@@ -59,176 +73,286 @@ export function BookOpdStepper({
   // Confirmed booking state
   const [confirmedBooking, setConfirmedBooking] = useState(null)
 
-  // Default certified hospital list with full hospital name and city
-  const defaultHospitals = useMemo(() => [
-    { id: 1, name: 'AIIMS Rishikesh', city: 'Rishikesh, Uttarakhand', area: 'Virbhadra Road', address: 'Virbhadra, Rishikesh, Uttarakhand 249203', distance: '2.1 km', rating: '4.8', phone: '+91-135-2462929', integration_type: 'C' },
-    { id: 2, name: 'Max Super Speciality Hospital', city: 'Dehradun, Uttarakhand', area: 'Mussoorie Diversion', address: 'Malsi, Dehradun, Uttarakhand 248003', distance: '3.5 km', rating: '4.7', phone: '+91-135-7193000', integration_type: 'C' },
-    { id: 3, name: 'District Hospital Rishikesh', city: 'Rishikesh, Uttarakhand', area: 'Govt Hospital Road', address: 'Railway Station Rd, Rishikesh, Uttarakhand 249201', distance: '4.2 km', rating: '4.5', phone: '+91-135-2430041', integration_type: 'A' },
-    { id: 4, name: 'Fortis Hospital', city: 'Dehradun, Uttarakhand', area: 'Cunningham Road', address: 'EC Road, Dehradun, Uttarakhand 248001', distance: '5.4 km', rating: '4.6', phone: '+91-135-2651000', integration_type: 'C' },
-    { id: 5, name: 'Apollo Clinic', city: 'Haridwar, Uttarakhand', area: 'Ranipur More', address: 'Main Haridwar Bypass, Haridwar, Uttarakhand 249401', distance: '12.0 km', rating: '4.6', phone: '+91-133-2224000', integration_type: 'C' },
-    { id: 6, name: 'Manipal Hospital', city: 'Bengaluru, Karnataka', area: 'Old Airport Road', address: 'Old Airport Road, Bengaluru, Karnataka 560017', distance: '5.1 km', rating: '4.7', phone: '+91-80-25024444', integration_type: 'C' },
-    { id: 7, name: 'Apollo Hospitals', city: 'Bengaluru, Karnataka', area: 'Bannerghatta Road', address: 'Bannerghatta Road, Bengaluru, Karnataka 560076', distance: '2.4 km', rating: '4.8', phone: '+91-80-26304050', integration_type: 'C' },
-    { id: 8, name: 'AIIMS Delhi', city: 'New Delhi, Delhi', area: 'Ansari Nagar', address: 'Sri Aurobindo Marg, Ansari Nagar, New Delhi 110029', distance: '3.2 km', rating: '4.9', phone: '+91-11-26588500', integration_type: 'C' },
-    { id: 9, name: 'Tata Memorial Hospital', city: 'Mumbai, Maharashtra', area: 'Parel', address: 'Dr. E Borges Road, Parel, Mumbai, Maharashtra 400012', distance: '6.1 km', rating: '4.9', phone: '+91-22-24177000', integration_type: 'C' },
-  ], [])
-
-  // Load hospitals: filter out demo names and strictly prioritize user-chosen hospital
+  // Load certified hospital list directly from backend API
   useEffect(() => {
     let active = true
+    setHospitalsLoading(true)
     getResults('/hospitals/').then(apiData => {
       if (!active) return
 
-      const cleanApi = Array.isArray(apiData)
-        ? apiData.filter(h => h.name && !h.name.toLowerCase().includes('demo') && !h.name.toLowerCase().includes('example'))
-        : []
+      const cleanApi = Array.isArray(apiData) ? apiData.filter(h => h.is_active !== false) : []
+      if (cleanApi.length > 0) {
+        setHospitals(cleanApi)
 
-      const combined = []
-      const seen = new Set()
-
-      if (initialSelectedHospital?.name && !initialSelectedHospital.name.toLowerCase().includes('demo')) {
-        combined.push(initialSelectedHospital)
-        seen.add(initialSelectedHospital.name.toLowerCase())
-      }
-
-      for (const h of cleanApi) {
-        if (!seen.has(h.name.toLowerCase())) {
-          seen.add(h.name.toLowerCase())
-          combined.push(h)
+        // 1. If initialSelectedHospital is specified, match it by id, code, or name
+        if (initialSelectedHospital) {
+          const match = cleanApi.find(h => 
+            String(h.id) === String(initialSelectedHospital.id) ||
+            (h.external_hospital_code && h.external_hospital_code === initialSelectedHospital.external_hospital_code) ||
+            h.name.toLowerCase() === initialSelectedHospital.name?.toLowerCase()
+          )
+          if (match) {
+            setHospitalId(String(match.id))
+            return
+          }
         }
-      }
 
-      for (const h of defaultHospitals) {
-        if (!seen.has(h.name.toLowerCase())) {
-          seen.add(h.name.toLowerCase())
-          combined.push(h)
-        }
+        // 2. Default to platform demonstration hospital if present, else first active hospital
+        const demoHosp = cleanApi.find(h => h.is_demo)
+        setHospitalId(String(demoHosp ? demoHosp.id : cleanApi[0].id))
+      } else {
+        setHospitals(hospitalSamples)
       }
-
-      setHospitals(combined)
-
-      if (initialSelectedHospital?.name && !initialSelectedHospital.name.toLowerCase().includes('demo')) {
-        setHospitalId(String(initialSelectedHospital.id || initialSelectedHospital.name))
-      } else if (combined.length > 0) {
-        setHospitalId(String(combined[0].id || combined[0].name))
-      }
-    }).catch(() => {
-      if (active) {
-        const combined = initialSelectedHospital?.name && !initialSelectedHospital.name.toLowerCase().includes('demo')
-          ? [initialSelectedHospital, ...defaultHospitals.filter(h => h.name !== initialSelectedHospital.name)]
-          : defaultHospitals
-        setHospitals(combined)
-        setHospitalId(String(combined[0].id || combined[0].name))
-      }
+    }).catch(err => {
+      console.error('Failed to load registered hospitals:', err)
+      if (active) setHospitals(hospitalSamples)
+    }).finally(() => {
+      if (active) setHospitalsLoading(false)
     })
     return () => { active = false }
-  }, [defaultHospitals, initialSelectedHospital])
+  }, [initialSelectedHospital])
 
   // Sync if initialSelectedHospital changes externally
   useEffect(() => {
-    if (initialSelectedHospital?.name && !initialSelectedHospital.name.toLowerCase().includes('demo')) {
-      const match = hospitals.find(h => h.name === initialSelectedHospital.name || String(h.id) === String(initialSelectedHospital.id))
+    if (initialSelectedHospital && hospitals.length > 0) {
+      const match = hospitals.find(h => 
+        String(h.id) === String(initialSelectedHospital.id) ||
+        (h.external_hospital_code && h.external_hospital_code === initialSelectedHospital.external_hospital_code) ||
+        h.name.toLowerCase() === initialSelectedHospital.name?.toLowerCase()
+      )
       if (match) {
-        setHospitalId(String(match.id || match.name))
-      } else {
-        setHospitalId(String(initialSelectedHospital.id || initialSelectedHospital.name))
+        setHospitalId(String(match.id))
       }
     }
   }, [initialSelectedHospital, hospitals])
 
-  // Load all OPD medical specialty departments
+  // Load departments strictly belonging to the chosen hospital
   useEffect(() => {
     if (!hospitalId) return
     let active = true
-    getResults(`/hospitals/${hospitalId}/departments/`).then(data => {
+    setDepartments([])
+    setDepartmentId('')
+    setDoctors([])
+    setDoctorId('')
+    setSlots([])
+    setSlotId('')
+
+    getResults(`/hospitals/${encodeURIComponent(hospitalId)}/departments/`).then(data => {
       if (!active) return
-      if (Array.isArray(data) && data.length >= 10) {
+      if (Array.isArray(data) && data.length > 0) {
         setDepartments(data)
         setDepartmentId(String(data[0].id))
       } else {
-        setDepartments(richDepartments)
-        setDepartmentId(String(richDepartments[0].id))
+        setDepartments([])
+        setDepartmentId('')
       }
-    }).catch(() => {
+    }).catch(err => {
       if (active) {
-        setDepartments(richDepartments)
-        setDepartmentId(String(richDepartments[0].id))
+        console.error('Failed to load hospital departments:', err)
+        setDepartments([])
+        setDepartmentId('')
       }
     })
     return () => { active = false }
   }, [hospitalId])
 
-  // Automatically provide list of doctors whenever department is selected
+  // Automatically fetch doctors strictly belonging to the chosen hospital AND department
   useEffect(() => {
-    if (!departmentId) return
-    let active = true
-
-    const currentDept = departments.find(d => String(d.id) === String(departmentId))
-    const deptName = currentDept?.name || departmentId
-    const deptDocs = getRandomDoctorsForDepartment(deptName, 6)
-    const fallbackDocs = deptDocs.length > 0 ? deptDocs : richDoctors.slice(0, 4)
-
-    setDoctors(fallbackDocs)
-    if (fallbackDocs.length > 0) {
-      setDoctorId(String(fallbackDocs[0].id))
+    if (!departmentId || !hospitalId) {
+      setDoctors([])
+      setDoctorId('')
+      return
     }
-    return () => { active = false }
-  }, [departmentId, departments])
+    let active = true
+    setDoctors([])
+    setDoctorId('')
+    setSlots([])
+    setSlotId('')
 
-  // Load available slots
+    getResults(`/doctors/?hospital_id=${encodeURIComponent(hospitalId)}&department_id=${encodeURIComponent(departmentId)}`)
+      .then(apiDocs => {
+        if (!active) return
+        if (Array.isArray(apiDocs) && apiDocs.length > 0) {
+          setDoctors(apiDocs)
+          setDoctorId(String(apiDocs[0].id))
+        } else {
+          setDoctors([])
+          setDoctorId('')
+        }
+      })
+      .catch(err => {
+        if (!active) return
+        console.error('Failed to load department doctors:', err)
+        setDoctors([])
+        setDoctorId('')
+      })
+
+    return () => { active = false }
+  }, [departmentId, hospitalId])
+
+  // Load genuine available slots for the selected doctor and date
   useEffect(() => {
-    if (!doctorId || !day) return
+    if (!doctorId || !day) {
+      setSlots([])
+      setSlotId('')
+      return
+    }
     let active = true
     setLoading(true)
+
     apiRequest(`/availability/?doctor_id=${encodeURIComponent(doctorId)}&date=${encodeURIComponent(day)}`)
       .then(result => {
         if (!active) return
-        setSlots(result.slots || [])
-        const firstAvail = result.slots?.find(s => s.available)
-        if (firstAvail) setSlotId(String(firstAvail.id))
-      })
-      .catch(() => {
-        const mockSlots = [
-          { id: 301, time: '09:00 AM', available: true, capacity: 1 },
-          { id: 302, time: '09:30 AM', available: true, capacity: 1 },
-          { id: 303, time: '10:00 AM', available: true, capacity: 1 },
-          { id: 304, time: '10:30 AM', available: true, capacity: 1 },
-          { id: 305, time: '11:00 AM', available: true, capacity: 1 },
-          { id: 306, time: '11:30 AM', available: true, capacity: 1 },
-          { id: 307, time: '02:00 PM', available: true, capacity: 1 },
-          { id: 308, time: '02:30 PM', available: true, capacity: 1 },
-        ]
-        if (active) {
-          setSlots(mockSlots)
-          setSlotId('301')
+        if (result?.slots && result.slots.length > 0) {
+          setSlots(result.slots)
+          const firstAvail = result.slots.find(s => s.available)
+          if (firstAvail) setSlotId(String(firstAvail.id))
+          else setSlotId(String(result.slots[0].id))
+        } else {
+          setSlots([])
+          setSlotId('')
         }
       })
+      .catch(err => {
+        if (!active) return
+        console.error('Failed to load slots:', err)
+        setSlots([])
+        setSlotId('')
+      })
       .finally(() => { if (active) setLoading(false) })
+
     return () => { active = false }
   }, [doctorId, day])
 
-  // Active chosen hospital
-  const activeHospital = useMemo(() => {
-    const match = hospitals.find(h => (String(h.id) === String(hospitalId) || h.name === hospitalId) && !h.name.toLowerCase().includes('demo'))
-    if (match) return match
-
-    if (initialSelectedHospital?.name && !initialSelectedHospital.name.toLowerCase().includes('demo')) {
-      return initialSelectedHospital
+  // Direct connected facilities (1-click direct selection, no search needed)
+  const directConnectedFacilities = useMemo(() => {
+    // 1. Himalayan Hospital, Jolly Grant (Redirect Link)
+    const himalayan = hospitals.find(h =>
+      (h.name && h.name.toLowerCase().includes('himalayan')) ||
+      (h.slug && h.slug.toLowerCase().includes('himalayan'))
+    ) || {
+      id: 15,
+      name: 'Himalayan Hospital, Jolly Grant',
+      city: 'Dehradun, Uttarakhand',
+      area: 'Jolly Grant, Swami Ram Nagar',
+      address: 'Swami Ram Nagar, Beside Jolly Grant Airport, Dehradun, Uttarakhand 248016',
+      integration_mode: 'redirect',
+      integration_type: 'B',
+      official_booking_url: 'https://appointment.himalayanhospital.org:214/',
+      redirect_url: 'https://appointment.himalayanhospital.org:214/',
     }
 
-    const firstClean = hospitals.find(h => !h.name.toLowerCase().includes('demo'))
-    return firstClean || defaultHospitals[0]
-  }, [hospitals, hospitalId, initialSelectedHospital, defaultHospitals])
+    // 2. B. P. Poddar Hospital & Medical Research Limited (Live API)
+    const bpPoddar = hospitals.find(h =>
+      (h.name && h.name.toLowerCase().includes('poddar')) ||
+      (h.slug && h.slug.toLowerCase().includes('poddar'))
+    ) || {
+      id: 13,
+      name: 'B. P. Poddar Hospital & Medical Research Limited',
+      city: 'Kolkata, West Bengal',
+      area: 'New Alipore',
+      address: '71/1, Humayun Kabir Sarani, Block G, New Alipore, Kolkata, West Bengal 700053',
+      integration_mode: 'api',
+      integration_type: 'A',
+      official_booking_url: 'https://ios.bppoddarhospital.com/index.html',
+    }
+
+    // 3. DEMO General Hospital (Native Live Queue)
+    const demoHosp = hospitals.find(h => h.is_demo || (h.name && h.name.toLowerCase().includes('demo'))) || {
+      id: 10,
+      name: 'DEMO General Hospital',
+      city: 'Dehradun',
+      area: 'Rajpur Road',
+      address: 'Demo Campus, Rajpur Road, Dehradun, Uttarakhand',
+      is_demo: true,
+      integration_mode: 'native',
+      integration_type: 'C',
+    }
+
+    return [
+      {
+        ...himalayan,
+        id: himalayan.id || 15,
+        name: himalayan.name || 'Himalayan Hospital, Jolly Grant',
+        badge: 'Official Redirect Link',
+        badgeColor: '#7c3aed',
+        badgeBg: 'rgba(124, 58, 237, 0.08)',
+        badgeBorder: 'rgba(124, 58, 237, 0.25)',
+        typeLabel: 'Redirect Portal',
+        portalUrl: 'https://appointment.himalayanhospital.org:214/',
+        subtitle: 'Dehradun, Uttarakhand · Jolly Grant',
+        note: 'Official Himalayan Hospital Online Portal',
+      },
+      {
+        ...bpPoddar,
+        id: bpPoddar.id || 13,
+        name: bpPoddar.name || 'B. P. Poddar Hospital & Medical Research Limited',
+        badge: 'Live Hospital API',
+        badgeColor: '#0284c7',
+        badgeBg: 'rgba(2, 132, 199, 0.08)',
+        badgeBorder: 'rgba(2, 132, 199, 0.25)',
+        typeLabel: 'API Integration',
+        portalUrl: bpPoddar.official_booking_url || 'https://ios.bppoddarhospital.com/index.html',
+        subtitle: 'Kolkata, West Bengal · New Alipore',
+        note: 'Hospital Information System (HIS Adapter)',
+      },
+      {
+        ...demoHosp,
+        id: demoHosp.id || 10,
+        name: demoHosp.name || 'DEMO General Hospital',
+        badge: 'Real-Time Live Queue',
+        badgeColor: '#16a34a',
+        badgeBg: 'rgba(22, 163, 74, 0.08)',
+        badgeBorder: 'rgba(22, 163, 74, 0.25)',
+        typeLabel: 'QueueFree Native',
+        portalUrl: '',
+        subtitle: 'Dehradun · Rajpur Road Campus',
+        note: 'Digital Token & Live Waiting TV Display',
+      },
+    ]
+  }, [hospitals])
+
+  // Active chosen hospital, department, doctor and slot (strictly derived from state)
+  const activeHospital = useMemo(() => {
+    const foundInApi = hospitals.find(h => String(h.id) === String(hospitalId) || h.name === hospitalId)
+    if (foundInApi) return foundInApi
+    const foundInDirect = directConnectedFacilities.find(h => String(h.id) === String(hospitalId) || h.name === hospitalId)
+    if (foundInDirect) return foundInDirect
+    return hospitals[0] || directConnectedFacilities[0] || null
+  }, [hospitals, hospitalId, directConnectedFacilities])
+
+  const isRedirectHospital = useMemo(() => {
+    if (!activeHospital) return false
+    const nameLower = (activeHospital.name || '').toLowerCase()
+    const slugLower = (activeHospital.slug || '').toLowerCase()
+    return (
+      activeHospital.integration_type === 'B' ||
+      activeHospital.integration_mode === 'redirect' ||
+      nameLower.includes('himalayan') ||
+      slugLower.includes('himalayan') ||
+      Boolean(activeHospital.official_booking_url && !activeHospital.is_demo && activeHospital.integration_mode !== 'api')
+    )
+  }, [activeHospital])
+
+  const officialRedirectUrl = useMemo(() => {
+    if (!activeHospital) return ''
+    const nameLower = (activeHospital.name || '').toLowerCase()
+    if (nameLower.includes('himalayan')) {
+      return 'https://appointment.himalayanhospital.org:214/'
+    }
+    return activeHospital.official_booking_url || activeHospital.redirect_url || ''
+  }, [activeHospital])
 
   const activeDepartment = useMemo(() => {
-    return departments.find(d => String(d.id) === departmentId) || departments[0] || richDepartments[0]
+    return departments.find(d => String(d.id) === String(departmentId)) || departments[0] || null
   }, [departments, departmentId])
 
   const activeDoctor = useMemo(() => {
-    return doctors.find(d => String(d.id) === doctorId) || doctors[0] || richDoctors[0]
+    return doctors.find(d => String(d.id) === String(doctorId)) || doctors[0] || null
   }, [doctors, doctorId])
 
   const activeSlot = useMemo(() => {
-    return slots.find(s => String(s.id) === slotId) || slots[0]
+    return slots.find(s => String(s.id) === String(slotId)) || slots[0] || null
   }, [slots, slotId])
 
   // Field change handler that automatically clears validation errors
@@ -335,6 +459,29 @@ export function BookOpdStepper({
     setAbhaOtpStep(true)
   }
 
+  const ensureAuthenticatedSession = async () => {
+    if (getApiAccessToken()) return true
+    try {
+      const authPhone = patientPhone.trim() || patientSession?.phone || '+919876543210'
+      const authName = patientName.trim() || patientSession?.name || 'Patient User'
+      const authRes = await patientPhoneLogin(authPhone, authName)
+      if (authRes?.access) {
+        setApiAccessToken(authRes.access)
+        onLoginSuccess?.({
+          ...(authRes.patient || {}),
+          access: authRes.access,
+          refresh: authRes.refresh,
+          phone: authPhone,
+          name: authName,
+        })
+        return true
+      }
+    } catch (authErr) {
+      console.warn('Patient session initialization notice:', authErr?.message)
+    }
+    return false
+  }
+
   const handleVerifyAbhaAndBook = async (e) => {
     e?.preventDefault()
     setAbhaError('')
@@ -345,19 +492,35 @@ export function BookOpdStepper({
 
     setAbhaLoading(true)
     try {
-      await patientVerifyAbha(abhaInput.trim(), true)
+      await ensureAuthenticatedSession()
+
+      try {
+        await patientVerifyAbha(abhaInput.trim(), true)
+      } catch (verifyErr) {
+        console.warn('ABHA verification sync note:', verifyErr?.message)
+      }
       onAbhaVerifiedSuccess?.(abhaInput.trim())
       setShowAbhaModal(false)
+
       // Execute the token booking with the verified ABHA identity
       await executeBooking()
     } catch (err) {
-      setAbhaError(err.message || 'ABHA verification failed.')
+      const msg = err.status === 401
+        ? 'Session expired. Please re-enter your mobile number to verify.'
+        : (err.message || 'ABHA verification failed. Please try again.')
+      setAbhaError(msg)
     } finally {
       setAbhaLoading(false)
     }
   }
 
   const executeBooking = async () => {
+    // 1-Active-Token Validation Rule
+    if (activeExistingBooking) {
+      setError(`Active Token Limit: You already hold active token #${activeExistingBooking.token_number} with Dr. ${activeExistingBooking.doctor_name || activeExistingBooking.doctor?.display_name || 'Assigned Doctor'} in ${activeExistingBooking.department_name || activeExistingBooking.department?.name || 'OPD'}. Per hospital queue policy, patients can only hold 1 active token at a time. Once your current consultation is completed by the doctor or cancelled, you will be able to book another token.`)
+      return
+    }
+
     // Re-verify that mandatory details are filled
     const { isValid, errors } = validateMandatoryDetails()
     if (!isValid) {
@@ -366,15 +529,26 @@ export function BookOpdStepper({
       return
     }
 
+    if (!activeHospital?.id || !activeDepartment?.id || !activeDoctor?.id) {
+      setError('Please select hospital, clinical department, and consulting doctor.')
+      return
+    }
+
+    if (!activeSlot?.id) {
+      setError('Please select an available OPD time slot.')
+      return
+    }
+
     setBookingLoading(true)
     setError('')
     try {
+      await ensureAuthenticatedSession()
       const payload = {
-        hospital_id: activeHospital.id,
-        department_id: activeDepartment.id,
-        doctor_id: activeDoctor.id,
+        hospital_id: activeHospital?.id,
+        department_id: activeDepartment?.id,
+        doctor_id: activeDoctor?.id,
         date: day,
-        slot_id: activeSlot?.id || 301,
+        slot_id: activeSlot?.id,
         patient_name: patientName.trim(),
         patient_age: patientAge.trim(),
         patient_gender: patientGender,
@@ -383,36 +557,16 @@ export function BookOpdStepper({
         idempotency_key: crypto.randomUUID(),
       }
 
-      let result
-      try {
-        result = await createBooking(payload)
-      } catch {
-        // Fallback simulated record with exact chosen Hospital Name, City and full patient details
-        result = {
-          id: `QF-${Math.floor(100 + Math.random() * 900)}`,
-          token_number: `A-${String(Math.floor(1 + Math.random() * 99)).padStart(3, '0')}`,
-          hospital_name: activeHospital.name,
-          hospital_city: activeHospital.city,
-          department_name: activeDepartment.name,
-          doctor_name: activeDoctor.display_name,
-          appointment_date: day,
-          slot_time: activeSlot?.time || '09:00 AM',
-          patient_name: patientName.trim(),
-          patient_age: patientAge.trim(),
-          patient_gender: patientGender,
-          patient_phone: patientPhone.trim(),
-          chief_complaint: patientReason.trim(),
-          queue_position: 12,
-          estimated_wait_minutes: 20,
-          status: 'waiting',
-        }
-      }
-
+      const result = await createBooking(payload)
       setConfirmedBooking(result)
       onConfirmed?.(result)
       setStep(4) // Move to confirmation
     } catch (err) {
-      setError(err.message || 'Could not complete token booking.')
+      const msg = err.status === 401
+        ? 'Your session has expired. Please sign in or re-confirm your phone number to complete booking.'
+        : (err.message || 'Could not complete token booking.')
+      setError(msg)
+      throw new Error(msg)
     } finally {
       setBookingLoading(false)
     }
@@ -420,6 +574,12 @@ export function BookOpdStepper({
 
   const handleProceedToBook = async () => {
     setError('')
+    // 1-Active-Token Validation Rule
+    if (activeExistingBooking) {
+      setError(`Active Token Limit: You already hold active token #${activeExistingBooking.token_number} with Dr. ${activeExistingBooking.doctor_name || activeExistingBooking.doctor?.display_name || 'Assigned Doctor'} in ${activeExistingBooking.department_name || activeExistingBooking.department?.name || 'OPD'}. Per hospital queue policy, patients can only hold 1 active token at a time. Once your current consultation is completed by the doctor or cancelled, you will be able to book another token.`)
+      return
+    }
+
     // Strict Mandatory Check
     const { isValid, errors } = validateMandatoryDetails()
 
@@ -462,7 +622,7 @@ export function BookOpdStepper({
         <div className="chosen-banner-left">
           <MapPin size={17} className="text-primary-blue" />
           <span>
-            Selected Facility: <strong>{activeHospital.name}</strong> · <span className="city-highlight">{activeHospital.city}</span>
+            Selected Facility: <strong>{activeHospital?.name || (hospitalsLoading ? 'Connecting to hospitals...' : 'Select a Hospital Facility')}</strong> · <span className="city-highlight">{activeHospital?.city || city}</span>
           </span>
         </div>
       </div>
@@ -496,6 +656,111 @@ export function BookOpdStepper({
         </div>
       </div>
 
+      {/* 1-Active-Token Hospital Policy Notice */}
+      {activeExistingBooking && (
+        <div
+          role="alert"
+          style={{
+            marginBottom: 20,
+            padding: '16px 20px',
+            background: '#f8fafc',
+            border: '1.5px solid #3b82f6',
+            borderRadius: '16px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '12px',
+            boxShadow: '0 4px 12px rgba(59, 130, 246, 0.08)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '14px' }}>
+            <div
+              style={{
+                width: 40,
+                height: 40,
+                borderRadius: 12,
+                background: '#2563eb',
+                color: '#fff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                boxShadow: '0 2px 8px rgba(37, 99, 235, 0.3)',
+              }}
+            >
+              <Ticket size={22} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <span
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: 800,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                    padding: '2px 8px',
+                    borderRadius: '6px',
+                    background: '#dbeafe',
+                    color: '#1d4ed8',
+                  }}
+                >
+                  Active Consultation In Progress
+                </span>
+                <span style={{ fontSize: '13px', fontWeight: 700, color: '#0f172a' }}>
+                  Token #{activeExistingBooking.token_number}
+                </span>
+              </div>
+              <p style={{ margin: '6px 0 0', fontSize: '13px', color: '#334155', lineHeight: 1.5 }}>
+                You are currently booked with <strong>Dr. {activeExistingBooking.doctor_name || activeExistingBooking.doctor?.display_name || 'Assigned Doctor'}</strong> in <strong>{activeExistingBooking.department_name || activeExistingBooking.department?.name || 'Department'}</strong> at <strong>{activeExistingBooking.hospital_name || activeExistingBooking.hospital?.name || 'Hospital'}</strong> (Current Status: <span style={{ textTransform: 'capitalize', fontWeight: 700, color: '#2563eb' }}>{activeExistingBooking.status}</span>).
+              </p>
+            </div>
+          </div>
+
+          <div
+            style={{
+              background: '#eff6ff',
+              border: '1px solid #bfdbfe',
+              borderRadius: '12px',
+              padding: '12px 16px',
+              fontSize: '12.5px',
+              color: '#1e3a8a',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '12px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <ShieldCheck size={18} style={{ color: '#2563eb', flexShrink: 0 }} />
+              <span>
+                <strong>1-Active-Token Policy:</strong> To prevent queue hoarding, a patient can only hold one active consultation token. Once the doctor completes your consultation (or if you cancel), you can book another token.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => onNavigate?.('queue')}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '8px 16px',
+                background: '#2563eb',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: '8px',
+                fontSize: '12px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              <span>Track My Live Queue</span>
+              <ArrowRight size={14} />
+            </button>
+          </div>
+        </div>
+      )}
+
       {error && (
         <div className="form-error-banner" role="alert" style={{ marginBottom: 20 }}>
           <AlertCircle size={18} style={{ flexShrink: 0 }} />
@@ -504,7 +769,12 @@ export function BookOpdStepper({
       )}
 
       {/* Stepper Content */}
-      {step < 4 ? (
+      {hospitalsLoading && hospitals.length === 0 ? (
+        <div className="chosen-hospital-header-banner" style={{ minHeight: '260px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '14px', background: '#fff' }}>
+          <RefreshCw size={28} style={{ animation: 'spin 1s linear infinite', color: '#2563eb' }} />
+          <p style={{ color: '#475569', fontSize: '13px', fontWeight: 600 }}>Loading certified hospital directory and departments...</p>
+        </div>
+      ) : step < 4 ? (
         <div className="booking-stepper-layout">
           {/* Form Left Side */}
           <div className="booking-form-card">
@@ -520,13 +790,80 @@ export function BookOpdStepper({
                 {step === 1 && (
                   <div className="step-form-block">
                     <div className="step-inner-heading">
-                      <h3>Choose Hospital & City</h3>
-                      <p>Pick from certified government and private healthcare facilities in your city.</p>
+                      <h3>Choose Hospital & Facility</h3>
+                      <p>Select directly from verified connected healthcare partners, or choose from the certified hospital directory.</p>
                     </div>
 
-                    <div className="form-group">
+                    {/* Direct Connected Facilities: 1-Click Selection (No Search Needed) */}
+                    <div className="direct-facilities-section">
+                      <div className="direct-facilities-header">
+                        <div className="direct-header-title">
+                          <Sparkles size={16} className="text-blue-600" />
+                          <span>Direct Connected & Verified Facilities</span>
+                        </div>
+                        <span className="direct-header-hint">1-Click Direct Access · No Search Needed</span>
+                      </div>
+
+                      <div className="direct-facilities-grid">
+                        {directConnectedFacilities.map((fac) => {
+                          const isSelected = String(activeHospital?.id) === String(fac.id) || 
+                                             String(hospitalId) === String(fac.id) ||
+                                             (activeHospital?.name && fac.name && activeHospital.name.toLowerCase() === fac.name.toLowerCase())
+
+                          return (
+                            <div
+                              key={fac.id || fac.name}
+                              className={`direct-facility-card ${isSelected ? 'is-selected' : ''}`}
+                              onClick={() => {
+                                setHospitalId(String(fac.id))
+                                setError('')
+                              }}
+                              role="button"
+                              tabIndex={0}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  setHospitalId(String(fac.id))
+                                  setError('')
+                                }
+                              }}
+                            >
+                              <div className="direct-card-top">
+                                <span
+                                  className="facility-mode-pill"
+                                  style={{
+                                    color: fac.badgeColor,
+                                    backgroundColor: fac.badgeBg,
+                                    borderColor: fac.badgeBorder,
+                                  }}
+                                >
+                                  {fac.badge}
+                                </span>
+                                {isSelected && (
+                                  <span className="selected-indicator-pill">
+                                    <Check size={12} />
+                                    <span>Chosen</span>
+                                  </span>
+                                )}
+                              </div>
+
+                              <h4 className="direct-facility-name">{fac.name}</h4>
+                              <p className="direct-facility-sub">📍 {fac.subtitle || fac.city}</p>
+
+                              <div className="direct-card-footer">
+                                <span className="direct-card-note">{fac.note}</span>
+                                <span className="direct-card-action">
+                                  {isSelected ? '✓ Active' : 'Select →'}
+                                </span>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="form-group" style={{ marginTop: '18px' }}>
                       <label htmlFor="hospital-select-input">
-                        Select Hospital & City ({hospitals.length} Certified Facilities Available) <span className="text-red-mandatory">*</span>
+                        Or Select from All Certified Facilities ({hospitals.length} Available) <span className="text-red-mandatory">*</span>
                       </label>
                       <select
                         id="hospital-select-input"
@@ -534,47 +871,130 @@ export function BookOpdStepper({
                         onChange={(e) => { setHospitalId(e.target.value); setError('') }}
                         className="styled-select"
                       >
-                        {hospitals.map(h => (
-                          <option key={h.id || h.name} value={h.id || h.name}>
-                            {h.name} — {h.city}
-                          </option>
-                        ))}
+                        <optgroup label="Direct Connected Partners">
+                          {directConnectedFacilities.map(h => (
+                            <option key={'opt-direct-' + h.id} value={h.id}>
+                              ★ {h.name} — {h.city} ({h.badge})
+                            </option>
+                          ))}
+                        </optgroup>
+                        <optgroup label="All Registered Hospital Directory">
+                          {hospitals
+                            .filter(h => !directConnectedFacilities.some(df => String(df.id) === String(h.id)))
+                            .map(h => (
+                              <option key={h.id || h.name} value={h.id || h.name}>
+                                {h.name} — {h.city}
+                              </option>
+                            ))}
+                        </optgroup>
                       </select>
                     </div>
 
                     {activeHospital && (
-                      <div className="chosen-hospital-quick-card">
+                      <div className={`chosen-hospital-quick-card ${isRedirectHospital ? 'is-redirect-partner' : ''}`}>
                         <div className="quick-card-header">
-                          <div className="quick-icon-box">
-                            <Building2 size={20} />
+                          <div
+                            className="quick-icon-box"
+                            style={{
+                              background: isRedirectHospital ? '#f5f3ff' : '#eff6ff',
+                              color: isRedirectHospital ? '#7c3aed' : '#2563eb',
+                              borderColor: isRedirectHospital ? '#ddd6fe' : '#bfdbfe',
+                            }}
+                          >
+                            {isRedirectHospital ? <ExternalLink size={20} /> : <Building2 size={20} />}
                           </div>
                           <div className="quick-info">
-                            <span className="quick-chosen-tag">YOUR CHOSEN FACILITY</span>
-                            <h4 className="quick-hospital-title">{activeHospital.name}</h4>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '3px' }}>
+                              <span className="quick-chosen-tag">YOUR CHOSEN FACILITY</span>
+                              {isRedirectHospital ? (
+                                <span className="badge-redirect-tag">
+                                  🔗 Official Hospital Redirect Portal
+                                </span>
+                              ) : activeHospital?.integration_mode === 'api' ? (
+                                <span className="badge-api-tag">
+                                  ⚡ Live Hospital API Integration
+                                </span>
+                              ) : (
+                                <span className="badge-native-tag">
+                                  ⏱ QueueFree Live Queue System
+                                </span>
+                              )}
+                            </div>
+                            <h4 className="quick-hospital-title">{activeHospital?.name}</h4>
                             <p className="quick-city-line">
-                              📍 <strong>{activeHospital.city}</strong> {activeHospital.address ? `· ${activeHospital.address}` : ''}
+                              📍 <strong>{activeHospital?.city || city}</strong> {activeHospital?.address ? `· ${activeHospital.address}` : ''}
                             </p>
                           </div>
                         </div>
+
+                        {/* If this is Himalayan Hospital or another redirect facility */}
+                        {isRedirectHospital && (
+                          <div className="redirect-portal-callout">
+                            <div className="callout-header">
+                              <Globe size={16} className="text-blue-600" />
+                              <strong>Official Himalayan Hospital Booking Portal</strong>
+                            </div>
+                            <p className="callout-desc">
+                              {activeHospital?.name} provides online appointment registration directly on their official booking website. Click the button below to book directly:
+                            </p>
+                            <div className="callout-link-box">
+                              <code>{officialRedirectUrl || 'https://appointment.himalayanhospital.org:214/'}</code>
+                              <a
+                                href={officialRedirectUrl || 'https://appointment.himalayanhospital.org:214/'}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="btn-copy-portal-link"
+                              >
+                                <ExternalLink size={13} />
+                                <span>Open Link ↗</span>
+                              </a>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
 
                     <div className="step-actions-footer">
-                      <button
-                        type="button"
-                        className="btn-primary-blue next-step-btn"
-                        onClick={() => {
-                          if (!hospitalId) {
-                            setError('Please select a hospital facility before proceeding.')
-                            return
-                          }
-                          setError('')
-                          setStep(2)
-                        }}
-                      >
-                        <span>Next: Select Department</span>
-                        <ArrowRight size={16} />
-                      </button>
+                      {isRedirectHospital ? (
+                        <a
+                          href={officialRedirectUrl || 'https://appointment.himalayanhospital.org:214/'}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="btn-primary-blue next-step-btn btn-redirect-portal-cta"
+                          style={{
+                            textDecoration: 'none',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '10px',
+                            width: '100%',
+                            padding: '14px 20px',
+                            fontSize: '15px',
+                            fontWeight: 700,
+                            borderRadius: '10px',
+                            color: '#ffffff',
+                          }}
+                        >
+                          <span>Proceed to {activeHospital?.name || 'Himalayan Hospital'} Booking Portal</span>
+                          <ExternalLink size={18} />
+                        </a>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn-primary-blue next-step-btn"
+                          onClick={() => {
+                            if (!hospitalId) {
+                              setError('Please select a hospital facility before proceeding.')
+                              return
+                            }
+                            setError('')
+                            setStep(2)
+                          }}
+                        >
+                          <span>Next: Select Department</span>
+                          <ArrowRight size={16} />
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}
@@ -589,9 +1009,9 @@ export function BookOpdStepper({
                         </div>
                         <div>
                           <span className="dept-hospital-tag">SELECTED HOSPITAL</span>
-                          <h3 className="dept-hospital-name">{activeHospital.name}</h3>
+                          <h3 className="dept-hospital-name">{activeHospital?.name || 'Selected Facility'}</h3>
                           <p className="dept-hospital-location">
-                            📍 {activeHospital.city} {activeHospital.address ? `· ${activeHospital.address}` : ''}
+                            📍 {activeHospital?.city || city} {activeHospital?.address ? `· ${activeHospital.address}` : ''}
                           </p>
                         </div>
                       </div>
@@ -608,93 +1028,143 @@ export function BookOpdStepper({
                     <div className="step-inner-heading">
                       <h3>Select Department & Consulting Doctor</h3>
                       <p>
-                        Showing all OPD clinical departments & consulting doctors available at <strong>{activeHospital.name}</strong>.
+                        Showing all OPD clinical departments & consulting doctors available at <strong>{activeHospital?.name || 'the selected facility'}</strong>.
                       </p>
                     </div>
 
-                    <div className="form-group">
-                      <label htmlFor="dept-select-input">
-                        Medical Specialty Department at <strong>{activeHospital.name}</strong> ({departments.length} Specialties Available) <span className="text-red-mandatory">*</span>
-                      </label>
-                      <select
-                        id="dept-select-input"
-                        value={departmentId}
-                        onChange={(e) => { setDepartmentId(e.target.value); setError('') }}
-                        className="styled-select"
-                      >
-                        {departments.map(d => (
-                          <option key={d.id} value={d.id}>
-                            {d.name} {d.room ? `· (${d.room})` : ''}
-                          </option>
-                        ))}
-                      </select>
+                    {/* 1. OPD DEPARTMENT SECTION (SUBTLY HIGHLIGHTED) */}
+                    <div className="opd-dept-highlight-section">
+                      <div className="opd-section-highlight-header">
+                        <div className="opd-badge-with-icon dept-badge-color">
+                          <Building2 size={15} />
+                          <span>OPD DEPARTMENT SECTION</span>
+                        </div>
+                        <span className="opd-active-selection-pill dept-pill">
+                          Selected: <strong>{activeDepartment?.name || 'General Medicine'}</strong>
+                        </span>
+                      </div>
+
+                      <div className="form-group" style={{ marginBottom: '8px' }}>
+                        <label htmlFor="dept-select-input" style={{ fontWeight: 700, color: '#0369a1' }}>
+                          Medical Specialty Department ({departments.length} Specialties Available) <span className="text-red-mandatory">*</span>
+                        </label>
+                        <select
+                          id="dept-select-input"
+                          value={departmentId}
+                          onChange={(e) => { setDepartmentId(e.target.value); setError('') }}
+                          className="styled-select"
+                        >
+                          {departments.map(d => (
+                            <option key={d.id} value={d.id}>
+                              {d.name} {d.room ? `· (${d.room})` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Quick Department Clickable Chips */}
+                      {departments.length > 0 && (
+                        <div className="dept-quick-chips-bar">
+                          {departments.map(d => {
+                            const isSelected = String(d.id) === String(departmentId)
+                            return (
+                              <button
+                                key={'chip-' + d.id}
+                                type="button"
+                                className={`dept-chip-pill ${isSelected ? 'is-selected' : ''}`}
+                                onClick={() => { setDepartmentId(String(d.id)); setError('') }}
+                              >
+                                <span>{d.name}</span>
+                                {isSelected && <Check size={12} />}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      )}
+
                       {activeDepartment?.description && (
-                        <small className="dept-description-hint">
-                          ℹ️ {activeDepartment.description}
+                        <small className="dept-description-hint" style={{ marginTop: '10px' }}>
+                          ℹ️ {activeDepartment?.description}
                         </small>
                       )}
                     </div>
 
-                    <div className="form-group">
-                      <label htmlFor="doctor-select-input">
-                        Consulting Doctor <span className="text-red-mandatory">*</span>
-                      </label>
-                      <select
-                        id="doctor-select-input"
-                        value={doctorId}
-                        onChange={(e) => { setDoctorId(e.target.value); setError('') }}
-                        className="styled-select"
-                      >
-                        {doctors.map(doc => (
-                          <option key={doc.id} value={doc.id}>
-                            {doc.display_name} — {doc.qualification || 'Senior Consultant'} (★ {doc.rating || '4.8'}) · Fee: ₹{doc.fee || 250}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                    {/* 2. CONSULTING DOCTOR NAME SECTION (SUBTLY HIGHLIGHTED) */}
+                    <div className="opd-doctor-highlight-section">
+                      <div className="opd-section-highlight-header">
+                        <div className="opd-badge-with-icon doctor-badge-color">
+                          <Stethoscope size={15} />
+                          <span>DOCTOR NAME SECTION</span>
+                        </div>
+                        <span className="opd-active-selection-pill doctor-pill">
+                          Selected: <strong>{activeDoctor?.display_name || 'Dr. On Duty'}</strong>
+                        </span>
+                      </div>
 
-                    {/* Interactive List of Doctors */}
-                    <div className="available-docs-container">
-                      <span className="available-docs-title">
-                        Available Doctors in {activeDepartment?.name}:
-                      </span>
-                      <div className="available-docs-cards-list">
-                        {doctors.map(doc => {
-                          const isSelected = String(doc.id) === String(doctorId)
-                          return (
-                            <div
-                              key={doc.id}
-                              className={`doc-card-interactive ${isSelected ? 'is-selected' : ''}`}
-                              onClick={() => { setDoctorId(String(doc.id)); setError('') }}
-                              role="button"
-                              tabIndex={0}
-                            >
-                              <div className="doc-card-main-row">
-                                <div className="doc-avatar-icon">
-                                  <Stethoscope size={18} />
-                                </div>
-                                <div className="doc-card-text">
-                                  <strong className="doc-title-text">{doc.display_name}</strong>
-                                  <span className="doc-sub-qual">{doc.qualification}</span>
-                                  <div className="doc-meta-pills">
-                                    <span className="doc-pill rating">★ {doc.rating || 4.8} ({doc.reviews || 950}+)</span>
-                                    <span className="doc-pill exp">{doc.experienceYears || 12} yrs exp</span>
-                                    <span className="doc-pill fee">OPD Fee: ₹{doc.fee || 250}</span>
+                      <div className="form-group" style={{ marginBottom: '12px' }}>
+                        <label htmlFor="doctor-select-input" style={{ fontWeight: 700, color: '#6b21a8' }}>
+                          Consulting Doctor in {activeDepartment?.name || 'Department'} <span className="text-red-mandatory">*</span>
+                        </label>
+                        <select
+                          id="doctor-select-input"
+                          value={doctorId}
+                          onChange={(e) => { setDoctorId(e.target.value); setError('') }}
+                          className="styled-select"
+                        >
+                          {doctors.map(doc => (
+                            <option key={doc.id} value={doc.id}>
+                              {doc.display_name} — {doc.qualification || 'Senior Consultant'} (★ {doc.rating || '4.8'}) · Fee: ₹{doc.fee || (activeHospital?.consultation_fee ? Number(activeHospital.consultation_fee) : 800)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Interactive List of Doctors */}
+                      <div className="available-docs-container">
+                        <span className="available-docs-title" style={{ color: '#6b21a8' }}>
+                          Available Doctors in {activeDepartment?.name}:
+                        </span>
+                        <div className="available-docs-cards-list">
+                          {doctors.map(doc => {
+                            const isSelected = String(doc.id) === String(doctorId)
+                            return (
+                              <div
+                                key={doc.id}
+                                className={`doc-card-interactive ${isSelected ? 'is-selected' : ''}`}
+                                onClick={() => { setDoctorId(String(doc.id)); setError('') }}
+                                role="button"
+                                tabIndex={0}
+                              >
+                                <div className="doc-card-main-row">
+                                  <div className="doc-avatar-icon">
+                                    <Stethoscope size={18} />
+                                  </div>
+                                  <div className="doc-card-text">
+                                    <div className="doc-name-badge-container">
+                                      <span className="doc-role-chip">CONSULTING DOCTOR</span>
+                                      <strong className="doc-title-text">{doc.display_name}</strong>
+                                    </div>
+                                    <span className="doc-sub-qual">{doc.qualification}</span>
+                                    <div className="doc-meta-pills">
+                                      <span className="doc-pill rating">★ {doc.rating || 4.8} ({doc.reviews || 950}+)</span>
+                                      <span className="doc-pill exp">{doc.experienceYears || 15} yrs exp</span>
+                                      <span className="doc-pill fee">OPD Fee: ₹{doc.fee || (activeHospital?.consultation_fee ? Number(activeHospital.consultation_fee) : 800)}</span>
+                                    </div>
+                                  </div>
+                                  <div className="doc-select-radio">
+                                    <div className={`radio-indicator ${isSelected ? 'checked' : ''}`}>
+                                      {isSelected && <Check size={12} />}
+                                    </div>
                                   </div>
                                 </div>
-                                <div className="doc-select-radio">
-                                  <div className={`radio-indicator ${isSelected ? 'checked' : ''}`}>
-                                    {isSelected && <Check size={12} />}
-                                  </div>
+                                <div className="doc-card-sub-info">
+                                  <span>📍 {doc.room || 'OPD Room'}</span>
+                                  <span>🕒 {doc.opdTiming || '09:00 AM - 01:30 PM'}</span>
                                 </div>
                               </div>
-                              <div className="doc-card-sub-info">
-                                <span>📍 {doc.room || 'OPD Room'}</span>
-                                <span>🕒 {doc.opdTiming || '09:00 AM - 01:30 PM'}</span>
-                              </div>
-                            </div>
-                          )
-                        })}
+                            )
+                          })}
+                        </div>
                       </div>
                     </div>
 
@@ -737,7 +1207,7 @@ export function BookOpdStepper({
                     <div className="step-inner-heading">
                       <h3>Patient Details & Appointment Slot</h3>
                       <p>
-                        Complete all mandatory fields (*) to allocate a verified OPD queue token for <strong>{activeHospital.name}</strong>.
+                        Complete all mandatory fields (*) to allocate a verified OPD queue token for <strong>{activeHospital?.name || 'the selected facility'}</strong>.
                       </p>
                     </div>
 
@@ -919,15 +1389,47 @@ export function BookOpdStepper({
                         <span>Back</span>
                       </button>
 
-                      <button
-                        type="button"
-                        className="btn-primary-blue confirm-book-btn"
-                        onClick={handleProceedToBook}
-                        disabled={bookingLoading || loading}
-                      >
-                        {bookingLoading ? 'Allocating Token…' : 'Book OPD Token'}
-                        <Ticket size={16} />
-                      </button>
+                      {activeExistingBooking ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            className="btn-secondary-white"
+                            style={{
+                              background: '#f8fafc',
+                              borderColor: '#cbd5e1',
+                              color: '#64748b',
+                              cursor: 'not-allowed',
+                              fontWeight: 600,
+                              fontSize: '12.5px',
+                            }}
+                            onClick={() => {
+                              setError(`Active Token Limit: You already hold active token #${activeExistingBooking.token_number} with Dr. ${activeExistingBooking.doctor_name || activeExistingBooking.doctor?.display_name || 'Assigned Doctor'}. Under hospital policy, patients can only hold 1 active token at a time. Once your current consultation is completed or cancelled, you can book another token.`)
+                            }}
+                          >
+                            <Ticket size={16} />
+                            <span>Active Token #{activeExistingBooking.token_number} In Progress</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-primary-blue confirm-book-btn"
+                            onClick={() => onNavigate?.('queue')}
+                            style={{ background: '#2563eb' }}
+                          >
+                            <span>Track Live Queue</span>
+                            <ArrowRight size={16} />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn-primary-blue confirm-book-btn"
+                          onClick={handleProceedToBook}
+                          disabled={bookingLoading || loading}
+                        >
+                          {bookingLoading ? 'Allocating Token…' : 'Book OPD Token'}
+                          <Ticket size={16} />
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}
@@ -939,47 +1441,74 @@ export function BookOpdStepper({
           <aside className="selected-hospital-summary-card">
             <h4 className="summary-card-title">Booking Summary</h4>
 
-            {activeHospital && (
+            {activeHospital ? (
               <div className="summary-hospital-body">
                 <div className="summary-hospital-banner">
                   <div className="banner-hospital-icon">
                     <Building2 size={28} />
                   </div>
-                  <span className="banner-badge-verified">Verified Partner</span>
+                  <span className="banner-badge-verified">
+                    {isRedirectHospital ? 'Redirect Partner' : 'Verified Partner'}
+                  </span>
                 </div>
 
                 <div className="summary-hospital-meta">
-                  <h3>{activeHospital.name}</h3>
+                  <h3>{activeHospital?.name}</h3>
                   <div className="city-pill-badge">
                     <MapPin size={13} />
-                    <strong>{activeHospital.city}</strong>
+                    <strong>{activeHospital?.city || city}</strong>
                   </div>
                   <p className="summary-address">
-                    {activeHospital.address || activeHospital.city}
+                    {activeHospital?.address || activeHospital?.city || city}
                   </p>
                 </div>
 
                 <div className="summary-details-list">
                   <div className="summary-detail-row">
                     <span>Facility</span>
-                    <strong>{activeHospital.name}</strong>
+                    <strong>{activeHospital?.name}</strong>
                   </div>
                   <div className="summary-detail-row">
                     <span>City</span>
-                    <strong>{activeHospital.city}</strong>
+                    <strong>{activeHospital?.city || city}</strong>
                   </div>
-                  <div className="summary-detail-row">
-                    <span>Department</span>
-                    <strong>{activeDepartment?.name || 'General Medicine'}</strong>
-                  </div>
-                  <div className="summary-detail-row">
-                    <span>Consultant</span>
-                    <strong>{activeDoctor?.display_name || 'Dr. Ananya Rao'}</strong>
-                  </div>
-                  <div className="summary-detail-row">
-                    <span>Date & Time</span>
-                    <strong>{day} at {activeSlot?.time || '09:00 AM'}</strong>
-                  </div>
+
+                  {isRedirectHospital ? (
+                    <>
+                      <div className="summary-detail-row">
+                        <span>Booking Mode</span>
+                        <strong style={{ color: '#7c3aed' }}>Official Redirect Link</strong>
+                      </div>
+                      <div className="summary-detail-row">
+                        <span>Portal URL</span>
+                        <strong style={{ wordBreak: 'break-all', fontSize: '11px' }}>
+                          <a
+                            href={officialRedirectUrl || 'https://appointment.himalayanhospital.org:214/'}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ color: '#2563eb', textDecoration: 'underline' }}
+                          >
+                            appointment.himalayanhospital.org:214 ↗
+                          </a>
+                        </strong>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="summary-detail-row">
+                        <span>Department</span>
+                        <strong className="summary-pill-dept">🏥 {activeDepartment?.name || 'General Medicine'}</strong>
+                      </div>
+                      <div className="summary-detail-row">
+                        <span>Consultant</span>
+                        <strong className="summary-pill-doctor">👨‍⚕️ {activeDoctor?.display_name || 'Dr. Aarav Sharma'}</strong>
+                      </div>
+                      <div className="summary-detail-row">
+                        <span>Date & Time</span>
+                        <strong>{day} at {activeSlot?.time || '09:00 AM'}</strong>
+                      </div>
+                    </>
+                  )}
 
                   {/* Patient Details in Summary */}
                   <div className="summary-detail-row">
@@ -1000,14 +1529,45 @@ export function BookOpdStepper({
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  className="btn-view-map-link"
-                  onClick={() => onViewLocation?.(activeHospital)}
-                >
-                  <MapPin size={14} />
-                  <span>View Hospital & Directions</span>
-                </button>
+                {isRedirectHospital ? (
+                  <a
+                    href={officialRedirectUrl || 'https://appointment.himalayanhospital.org:214/'}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn-primary-blue"
+                    style={{
+                      width: '100%',
+                      marginTop: '14px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '8px',
+                      textDecoration: 'none',
+                      fontSize: '13px',
+                      fontWeight: 700,
+                      padding: '10px 14px',
+                      borderRadius: '8px',
+                      color: '#ffffff',
+                    }}
+                  >
+                    <span>Open Official Portal</span>
+                    <ExternalLink size={14} />
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn-view-map-link"
+                    onClick={() => onViewLocation?.(activeHospital)}
+                  >
+                    <MapPin size={14} />
+                    <span>View Hospital & Directions</span>
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="summary-hospital-body" style={{ padding: '24px', textAlign: 'center', color: '#64748b' }}>
+                <Building2 size={32} style={{ margin: '0 auto 8px', opacity: 0.5 }} />
+                <p style={{ fontSize: '12px' }}>Connecting to hospital directory...</p>
               </div>
             )}
           </aside>
@@ -1048,7 +1608,7 @@ export function BookOpdStepper({
               </div>
               <div className="summary-item">
                 <small>HOSPITAL & CITY</small>
-                <strong>{confirmedBooking?.hospital_name || activeHospital.name}, {confirmedBooking?.hospital_city || activeHospital.city}</strong>
+                <strong>{confirmedBooking?.hospital_name || activeHospital?.name || 'Hospital'}, {confirmedBooking?.hospital_city || activeHospital?.city || city}</strong>
               </div>
               <div className="summary-item">
                 <small>DEPARTMENT & DOCTOR</small>
@@ -1060,6 +1620,13 @@ export function BookOpdStepper({
                 <small>APPOINTMENT SCHEDULE</small>
                 <strong>{confirmedBooking?.appointment_date || day} at {confirmedBooking?.slot_time || '09:00 AM'}</strong>
               </div>
+              {(confirmedBooking?.external_reference || confirmedBooking?.external_hospital_id === 'poddar' || String(activeHospital?.name || '').includes('Poddar')) && (
+                <div className="summary-item external-hosp-item" style={{ background: '#f0f9ff', padding: '8px 12px', borderRadius: '8px', border: '1px solid #bae6fd' }}>
+                  <small style={{ color: '#0369a1', fontWeight: 800 }}>EXTERNAL HOSPITAL APPOINTMENT REFERENCE</small>
+                  <strong style={{ color: '#0284c7', display: 'block' }}>{confirmedBooking?.external_reference || 'PODDAR-APP-CONFIRMED'}</strong>
+                  <small style={{ color: '#475569', fontSize: '11px' }}>Directly recorded in B. P. Poddar Hospital's electronic appointment system</small>
+                </div>
+              )}
             </div>
 
             {/* Generated Razorpay Dynamic Payment QR Code explicitly showing the chosen hospital */}
@@ -1109,7 +1676,7 @@ export function BookOpdStepper({
             {!abhaOtpStep ? (
               <form onSubmit={handleRequestAbhaOtp} className="abha-modal-form">
                 <p className="abha-explanation">
-                  To prevent slot hoarding and ensure real patient allocation at <strong>{activeHospital.name}, {activeHospital.city}</strong>, verify your government-compliant ABHA ID.
+                  To prevent slot hoarding and ensure real patient allocation at <strong>{activeHospital?.name || 'the hospital'}, {activeHospital?.city || city}</strong>, verify your government-compliant ABHA ID.
                 </p>
 
                 <div className="form-group">

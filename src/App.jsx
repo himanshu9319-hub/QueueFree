@@ -19,9 +19,20 @@ import { EmergencyBedFinder } from './components/pages/EmergencyBedFinder'
 import { HealthRecords } from './components/pages/HealthRecords'
 import { PatientProfile } from './components/pages/PatientProfile'
 
-// Staff portals
+// Staff & Display portals
 import { DoctorPortal } from './components/dashboards/DoctorPortal'
 import { ReceptionPortal } from './components/dashboards/ReceptionPortal'
+import { HospitalAdminPortal } from './components/dashboards/HospitalAdminPortal'
+import { SuperAdminPortal } from './components/dashboards/SuperAdminPortal'
+import { PublicDisplayBoard } from './components/dashboards/PublicDisplayBoard'
+
+// Dedicated Role Login Pages
+import { PatientLoginPage } from './components/auth/PatientLoginPage'
+import { DoctorLoginPage } from './components/auth/DoctorLoginPage'
+import { ReceptionLoginPage } from './components/auth/ReceptionLoginPage'
+import { HospitalAdminLoginPage } from './components/auth/HospitalAdminLoginPage'
+import { SuperAdminLoginPage } from './components/auth/SuperAdminLoginPage'
+import { ErrorBoundary } from './components/common/ErrorBoundary'
 
 // Location & Maps (kept intact as instructed)
 import { LocationPanel } from './components/LocationPanel'
@@ -38,19 +49,54 @@ export function App() {
   // Lenis smooth inertia scrolling
   useLenisSmoothScroll()
 
-  // Opening entrance animation state: triggers on website start
-  const [showIntro, setShowIntro] = useState(true)
+  // Opening entrance animation state: default false for instant loading without blank screen delay
+  const [showIntro, setShowIntro] = useState(false)
 
   // Mobile sidebar drawer toggle
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
 
-  // Portal Mode: 'patient' | 'doctor' | 'reception'
-  const [portalMode, setPortalMode] = useState(() => {
-    const path = window.location.pathname.toLowerCase()
-    if (path.includes('/doctor')) return 'doctor'
-    if (path.includes('/reception') || path.includes('/hospital')) return 'reception'
-    return 'patient'
-  })
+  const resolveRoute = useCallback(() => {
+    const p = (window.location.pathname || '/').toLowerCase()
+    const s = (window.location.search || '').toLowerCase()
+    if (s.includes('portal=display') || s.includes('display') || p.includes('display')) return '/display'
+    if (s.includes('portal=doctor') || p.includes('doctor')) return '/doctor'
+    if (s.includes('portal=reception') || p.includes('reception')) return '/reception'
+    if (s.includes('portal=superadmin') || p.includes('super-admin') || p.includes('superadmin')) return '/super-admin'
+    if (s.includes('portal=admin') || p.includes('hospital-admin')) return '/hospital-admin'
+    return p
+  }, [])
+
+  // Explicit Pathname-based Routing: supports dedicated role login pages and dashboards
+  const [currentPath, setCurrentPath] = useState(resolveRoute)
+
+  const navigate = useCallback((to) => {
+    window.history.pushState({}, '', to)
+    const lower = to.toLowerCase()
+    if (lower.includes('display') || lower.includes('portal=display')) {
+      setCurrentPath('/display')
+    } else {
+      setCurrentPath(lower)
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [])
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setCurrentPath(resolveRoute())
+    }
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [resolveRoute])
+
+  // Synchronize active tab from route
+  useEffect(() => {
+    if (currentPath.includes('/book')) setTab('book')
+    else if (currentPath.includes('/queue')) setTab('queue')
+    else if (currentPath.includes('/nearby')) setTab('nearby')
+    else if (currentPath.includes('/emergency')) setTab('emergency')
+    else if (currentPath.includes('/records')) setTab('records')
+    else if (currentPath.includes('/profile')) setTab('profile')
+  }, [currentPath])
 
   // Patient Authentication & Session (NO ABHA ASKED AT LOGIN!)
   const [patientSession, setPatientSession] = useState(() => loadJson('queuefree-patient-session', null))
@@ -79,7 +125,22 @@ export function App() {
   const [locationAsked, setLocationAsked] = useState(false)
 
   // Queue & Token State
-  const [token, setToken] = useState(() => loadJson('queuefree-token', null))
+  const [token, setToken] = useState(() => {
+    try {
+      const saved = loadJson('queuefree-token', null)
+      if (!saved) return null
+      const hosp = String(saved.hospital_name || (typeof saved.hospital === 'object' ? saved.hospital?.name : saved.hospital) || '').toLowerCase()
+      const doc = String(saved.doctor_name || (typeof saved.doctor === 'object' ? saved.doctor?.display_name : saved.doctor) || '').toLowerCase()
+      if (hosp.includes('apollo') || doc.includes('sharmistha')) {
+        localStorage.removeItem('queuefree-token')
+        return null
+      }
+      return saved
+    } catch {
+      localStorage.removeItem('queuefree-token')
+      return null
+    }
+  })
   const [queues, setQueues] = useState(() => loadJson('queuefree-queues', {}))
   const [toast, setToast] = useState('')
   const [apiBookings, setApiBookings] = useState([])
@@ -132,6 +193,13 @@ export function App() {
     } catch (err) {
       if (err.status === 401) {
         setToast('Session expired. Please sign in again.')
+        setPatientSession(null)
+        setApiAccessToken('')
+        setToken(null)
+        setApiBookings([])
+        localStorage.removeItem('queuefree-patient-session')
+        localStorage.removeItem('queuefree-token')
+        localStorage.removeItem('queuefree-queues')
       } else {
         setApiError(err.message)
       }
@@ -279,10 +347,33 @@ export function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  // Patient Login Handler with Phone AND Email (Dynamic User Name!)
-  const handlePatientLogin = async ({ phone, email, name }) => {
-    const userEmail = email || 'patient@example.com'
-    const userName = name || deriveNameFromEmail(userEmail, 'Patient User')
+  // Patient Login Handler supporting both Option A (ABHA) and Option B (Phone)
+  const handlePatientLogin = async (authResult) => {
+    const phone = authResult?.phone || '+919876543210'
+    const userEmail = authResult?.email || 'patient@example.com'
+    const userName = authResult?.name || deriveNameFromEmail(userEmail, 'Patient User')
+    const isAbha = Boolean(authResult?.abha_verified)
+    const abhaId = authResult?.abha_id || ''
+
+    if (authResult?.access) {
+      setApiAccessToken(authResult.access)
+      const session = {
+        ...authResult,
+        phone,
+        email: userEmail,
+        name: userName,
+        abha_verified: isAbha,
+        abha_id: abhaId,
+      }
+      setPatientSession(session)
+      setPatientAbhaVerified(isAbha)
+      setPatientAbhaId(abhaId)
+      setToast(isAbha ? `Welcome, ${userName}! Verified via ABHA. Live Board ready.` : `Welcome, ${userName}! Signed in. Live Board ready.`)
+      setTab('dashboard')
+      navigate('/patient/dashboard')
+      return
+    }
+
     try {
       const session = await patientPhoneLogin(phone, userName, userEmail)
       setApiAccessToken(session.access)
@@ -291,9 +382,13 @@ export function App() {
       if (session.abha_verified) {
         setPatientAbhaVerified(true)
         setPatientAbhaId(session.abha_id)
+      } else {
+        setPatientAbhaVerified(false)
+        setPatientAbhaId('')
       }
-      setToast(`Welcome, ${finalName}! Signed in successfully.`)
+      setToast(`Welcome, ${finalName}! Signed in successfully. Live Board ready.`)
       setTab('dashboard')
+      navigate('/patient/dashboard')
     } catch {
       // Offline fallback session
       const fallbackSession = {
@@ -304,8 +399,10 @@ export function App() {
         abha_verified: false,
       }
       setPatientSession(fallbackSession)
+      setPatientAbhaVerified(false)
       setToast(`Welcome, ${userName}! Signed in successfully.`)
       setTab('dashboard')
+      navigate('/patient/dashboard')
     }
   }
 
@@ -313,33 +410,97 @@ export function App() {
   const handlePatientLogout = () => {
     setApiAccessToken('')
     setPatientSession(null)
+    setPatientAbhaVerified(false)
+    setPatientAbhaId('')
     setSelectedHospital(null)
+    setToken(null)
+    setApiBookings([])
+    localStorage.removeItem('queuefree-patient-session')
+    localStorage.removeItem('queuefree-abha-verified')
+    localStorage.removeItem('queuefree-abha-id')
+    localStorage.removeItem('queuefree-token')
+    localStorage.removeItem('queuefree-queues')
     setToast('You have been signed out safely.')
+    navigate('/patient/login')
   }
 
   // Doctor Staff Login Handler
   const handleDoctorLogin = (authData) => {
-    setStaffSession(authData)
-    setPortalMode('doctor')
+    const session = { ...authData, role: 'doctor' }
+    setStaffSession(session)
     if (authData?.access) setApiAccessToken(authData.access)
-    setToast(`Welcome, ${authData.display_name || authData.username || 'Doctor'}! Signed in to Doctor OPD Console.`)
+    setToast(`Welcome, ${authData.doctor_name || authData.username || 'Doctor'}!`)
+    navigate('/doctor/dashboard')
+  }
+
+  const handleDoctorLogout = () => {
+    setApiAccessToken('')
+    setStaffSession(null)
+    setToast('Doctor signed out safely.')
+    navigate('/doctor/login')
   }
 
   // Reception Staff Login Handler
   const handleReceptionLogin = (authData) => {
-    setStaffSession(authData)
-    setPortalMode('reception')
+    const session = { ...authData, role: 'reception' }
+    setStaffSession(session)
     if (authData?.access) setApiAccessToken(authData.access)
-    setToast(`Welcome, ${authData.display_name || authData.username || 'Receptionist'}! Signed in to Reception Console.`)
+    setToast(`Welcome, ${authData.username || 'Receptionist'}!`)
+    navigate('/reception/dashboard')
   }
 
-  // Staff Logout Handler (Returns cleanly to Starting Login Page)
+  const handleReceptionLogout = () => {
+    setApiAccessToken('')
+    setStaffSession(null)
+    setToast('Receptionist signed out safely.')
+    navigate('/reception/login')
+  }
+
+  // Hospital Admin Staff Login Handler
+  const handleHospitalAdminLogin = (authData) => {
+    const session = { ...authData, role: 'hospital_admin' }
+    setStaffSession(session)
+    if (authData?.access) setApiAccessToken(authData.access)
+    setToast(`Welcome to ${authData.hospital_name || 'Hospital'} Admin Portal.`)
+    navigate('/hospital-admin/dashboard')
+  }
+
+  const handleHospitalAdminLogout = () => {
+    setApiAccessToken('')
+    setStaffSession(null)
+    setToast('Hospital Admin signed out safely.')
+    navigate('/hospital-admin/login')
+  }
+
+  // Super Admin Staff Login Handler
+  const handleSuperAdminLogin = (authData) => {
+    const session = { ...authData, role: 'super_admin' }
+    setStaffSession(session)
+    if (authData?.access) setApiAccessToken(authData.access)
+    setToast(`Welcome Super Admin! Signed in to Platform Root.`)
+    navigate('/super-admin/dashboard')
+  }
+
+  const handleSuperAdminLogout = () => {
+    setApiAccessToken('')
+    setStaffSession(null)
+    setToast('Super Admin signed out safely.')
+    navigate('/super-admin/login')
+  }
+
+  // Unified Staff Login Handler (Dispatches according to role)
+  const handleStaffLogin = (authData) => {
+    if (authData.role === 'super_admin') handleSuperAdminLogin(authData)
+    else if (authData.role === 'hospital_admin') handleHospitalAdminLogin(authData)
+    else if (authData.role === 'doctor') handleDoctorLogin(authData)
+    else handleReceptionLogin(authData)
+  }
+
   const handleStaffLogout = () => {
     setApiAccessToken('')
     setStaffSession(null)
-    setPortalMode('patient')
-    window.history.pushState({}, '', '/')
     setToast('Logged out of staff console safely.')
+    navigate('/')
   }
 
   const handleAbhaVerifiedSuccess = (verifiedId) => {
@@ -392,15 +553,125 @@ export function App() {
   }
 
   // =========================================================================
-  // ROUTE 1: DOCTOR PORTAL (/doctor) - Doctor Only
+  // ROUTE DISPLAY: LIVE DISPLAY BOARD (/display) - REQUIRES SIGNIN / LOGIN
   // =========================================================================
-  if (portalMode === 'doctor' || staffSession?.role === 'doctor') {
+  if (currentPath === '/display' || currentPath.includes('display')) {
+    if (!patientSession && !staffSession) {
+      return (
+        <ErrorBoundary onReset={() => navigate('/')}>
+          <PatientLoginPage
+            onLoginSuccess={(auth) => {
+              handlePatientLogin(auth)
+              navigate('/display')
+            }}
+            onNavigate={navigate}
+          />
+        </ErrorBoundary>
+      )
+    }
+
+    return (
+      <ErrorBoundary onReset={() => navigate('/')}>
+        <PublicDisplayBoard
+          onExit={() => {
+            navigate('/')
+          }}
+        />
+      </ErrorBoundary>
+    )
+  }
+
+  // =========================================================================
+  // ROUTE 0: SUPER ADMIN PORTAL (/super-admin) - Platform Root
+  // =========================================================================
+  if (currentPath.includes('/super-admin') || currentPath.includes('/superadmin')) {
+    if (currentPath.includes('/login') || !staffSession || staffSession.role !== 'super_admin') {
+      return (
+        <>
+          <SuperAdminLoginPage onLoginSuccess={handleSuperAdminLogin} onNavigate={navigate} />
+          {toast && (
+            <div className="toast" role="status">
+              <Check size={16} />
+              <span>{toast}</span>
+            </div>
+          )}
+        </>
+      )
+    }
+    return (
+      <>
+        <SuperAdminPortal
+          initialAuth={staffSession}
+          onLogout={handleSuperAdminLogout}
+          onExitToPatientPortal={() => navigate('/')}
+        />
+        {toast && (
+          <div className="toast" role="status">
+            <Check size={16} />
+            <span>{toast}</span>
+          </div>
+        )}
+      </>
+    )
+  }
+
+  // =========================================================================
+  // ROUTE 1: HOSPITAL ADMIN PORTAL (/hospital-admin) - Hospital Admin Only
+  // =========================================================================
+  if (currentPath.includes('/hospital-admin') || (currentPath.includes('/admin') && !currentPath.includes('super'))) {
+    if (currentPath.includes('/login') || !staffSession || !['hospital_admin', 'super_admin'].includes(staffSession.role)) {
+      return (
+        <>
+          <HospitalAdminLoginPage onLoginSuccess={handleHospitalAdminLogin} onNavigate={navigate} />
+          {toast && (
+            <div className="toast" role="status">
+              <Check size={16} />
+              <span>{toast}</span>
+            </div>
+          )}
+        </>
+      )
+    }
+    return (
+      <>
+        <HospitalAdminPortal
+          initialAuth={staffSession}
+          onLogout={handleHospitalAdminLogout}
+          onExitToPatientPortal={() => navigate('/')}
+        />
+        {toast && (
+          <div className="toast" role="status">
+            <Check size={16} />
+            <span>{toast}</span>
+          </div>
+        )}
+      </>
+    )
+  }
+
+  // =========================================================================
+  // ROUTE 2: DOCTOR PORTAL (/doctor) - Doctor Consultation Only
+  // =========================================================================
+  if (currentPath.includes('/doctor')) {
+    if (currentPath.includes('/login') || !staffSession || !['doctor', 'super_admin'].includes(staffSession.role)) {
+      return (
+        <>
+          <DoctorLoginPage onLoginSuccess={handleDoctorLogin} onNavigate={navigate} />
+          {toast && (
+            <div className="toast" role="status">
+              <Check size={16} />
+              <span>{toast}</span>
+            </div>
+          )}
+        </>
+      )
+    }
     return (
       <>
         <DoctorPortal
           initialAuth={staffSession}
-          onLogout={handleStaffLogout}
-          onExitToPatientPortal={handleStaffLogout}
+          onLogout={handleDoctorLogout}
+          onExitToPatientPortal={() => navigate('/')}
         />
         {toast && (
           <div className="toast" role="status">
@@ -413,15 +684,28 @@ export function App() {
   }
 
   // =========================================================================
-  // ROUTE 2: RECEPTION PORTAL (/reception) - Receptionist Only
+  // ROUTE 3: RECEPTION PORTAL (/reception) - Receptionist Only
   // =========================================================================
-  if (portalMode === 'reception' || ['reception', 'hospital_admin'].includes(staffSession?.role)) {
+  if (currentPath.includes('/reception')) {
+    if (currentPath.includes('/login') || !staffSession || !['reception', 'receptionist', 'super_admin'].includes(staffSession.role)) {
+      return (
+        <>
+          <ReceptionLoginPage onLoginSuccess={handleReceptionLogin} onNavigate={navigate} />
+          {toast && (
+            <div className="toast" role="status">
+              <Check size={16} />
+              <span>{toast}</span>
+            </div>
+          )}
+        </>
+      )
+    }
     return (
       <>
         <ReceptionPortal
           initialAuth={staffSession}
-          onLogout={handleStaffLogout}
-          onExitToPatientPortal={handleStaffLogout}
+          onLogout={handleReceptionLogout}
+          onExitToPatientPortal={() => navigate('/')}
         />
         {toast && (
           <div className="toast" role="status">
@@ -434,15 +718,50 @@ export function App() {
   }
 
   // =========================================================================
-  // ROUTE 3: STARTING LOGIN PAGE (Role Selection: Patient / Doctor / Receptionist)
+  // ROUTE 4: DEDICATED PATIENT LOGIN (/patient/login)
+  // =========================================================================
+  if (currentPath === '/patient/login') {
+    return (
+      <>
+        <PatientLoginPage onLoginSuccess={handlePatientLogin} onNavigate={navigate} />
+        {toast && (
+          <div className="toast" role="status">
+            <Check size={16} />
+            <span>{toast}</span>
+          </div>
+        )}
+      </>
+    )
+  }
+
+  // =========================================================================
+  // ROUTE 5: UNAUTHENTICATED PATIENT ACCESS (Redirect or Landing)
   // =========================================================================
   if (!patientSession) {
+    if (currentPath.startsWith('/patient')) {
+      return (
+        <>
+          <PatientLoginPage onLoginSuccess={handlePatientLogin} onNavigate={navigate} />
+          {toast && (
+            <div className="toast" role="status">
+              <Check size={16} />
+              <span>{toast}</span>
+            </div>
+          )}
+        </>
+      )
+    }
+
     return (
       <>
         <LandingPage
           onLoginSuccess={handlePatientLogin}
           onDoctorLoginSuccess={handleDoctorLogin}
           onReceptionLoginSuccess={handleReceptionLogin}
+          onHospitalAdminLoginSuccess={handleHospitalAdminLogin}
+          onSuperAdminLoginSuccess={handleSuperAdminLogin}
+          onStaffLoginSuccess={handleStaffLogin}
+          onNavigate={navigate}
         />
         {toast && (
           <div className="toast" role="status">
@@ -487,14 +806,20 @@ export function App() {
         />
 
         <main className="patient-page-body">
-          <AnimatePresence mode="wait">
-            <PageTransition tabKey={tab}>
+          <ErrorBoundary onReset={() => setTab('dashboard')}>
+            <AnimatePresence mode="wait">
+              <PageTransition tabKey={tab}>
               {tab === 'dashboard' && (
                 <PatientHomeDashboard
                   onNavigate={setTab}
                   bookings={apiBookings}
                   activeToken={token}
                   hospitalsCount={liveHospitals.length || 12}
+                  patientSession={patientSession}
+                  patientAbhaVerified={patientAbhaVerified}
+                  patientAbhaId={patientAbhaId}
+                  refreshBookings={refreshPatientBookings}
+                  onLogout={handlePatientLogout}
                 />
               )}
 
@@ -512,6 +837,8 @@ export function App() {
                   city={city}
                   onNavigate={setTab}
                   patientSession={patientSession}
+                  onLoginSuccess={handlePatientLogin}
+                  existingBookings={apiBookings}
                 />
               )}
 
@@ -568,6 +895,7 @@ export function App() {
               )}
             </PageTransition>
           </AnimatePresence>
+          </ErrorBoundary>
         </main>
       </div>
 

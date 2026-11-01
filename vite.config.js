@@ -8,6 +8,18 @@ export default defineConfig(({ command, mode }) => {
 
   return {
     plugins: [react(), tailwindcss()],
+    server: {
+      host: true, // Listen on all addresses, including 127.0.0.1 and localhost
+      port: 5173,
+      strictPort: true,
+      cors: true,
+      proxy: {
+        '/api': {
+          target: 'http://127.0.0.1:8000',
+          changeOrigin: true,
+        },
+      },
+    },
     define: {
       __DASHBOARD_PREVIEW__: JSON.stringify(dashboardPreview),
     },

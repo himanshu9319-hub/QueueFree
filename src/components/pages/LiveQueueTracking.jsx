@@ -2,10 +2,10 @@ import { useState, useMemo, useEffect } from 'react'
 import {
   Activity, Users, Clock, Bell, MapPin, Calendar, Check, AlertCircle,
   Ticket, ArrowRight, RefreshCw, XCircle, Stethoscope, ChevronRight,
-  ShieldCheck, Sparkles, CheckCircle2, UserCheck, Play, Radio
+  ShieldCheck, Sparkles, CheckCircle2, UserCheck, Radio, AlertTriangle
 } from 'lucide-react'
 import { motion } from 'framer-motion'
-import { apiRequest } from '../../lib/queueApi'
+import { apiRequest, createSseQueueSubscriber } from '../../lib/queueApi'
 
 export function LiveQueueTracking({
   bookings = [],
@@ -16,14 +16,68 @@ export function LiveQueueTracking({
   onViewLocation,
   refreshBookings,
 }) {
-  const activeBooking = bookings.find(b => ['waiting', 'serving', 'arrived'].includes(b.status)) || activeToken
+  const isEligibleBooking = (b) => {
+    if (!b) return false
+    const hosp = String(b.hospital_name || (typeof b.hospital === 'object' ? b.hospital?.name : b.hospital) || '').toLowerCase()
+    const doc = String(b.doctor_name || (typeof b.doctor === 'object' ? b.doctor?.display_name : b.doctor) || '').toLowerCase()
+    if (hosp.includes('apollo') || doc.includes('sharmistha')) return false
+    return true
+  }
 
-  const tokenNumber = activeBooking?.token_number || activeBooking?.id || (bookings.length > 0 ? 'A-025' : 'A-025')
-  const hospitalName = activeBooking?.hospital_name || activeBooking?.hospital || 'AIIMS Rishikesh'
-  const hospitalCity = activeBooking?.hospital_city || activeBooking?.city || 'Rishikesh, Uttarakhand'
-  const departmentName = activeBooking?.department_name || activeBooking?.department || 'General Medicine'
-  const doctorName = activeBooking?.doctor_name || activeBooking?.doctor || 'Dr. Ananya Rao'
-  const opdRoom = activeBooking?.room || 'OPD Room 102, 1st Floor'
+  const activeStatuses = ['waiting', 'serving', 'arrived', 'calling', 'called', 'confirmed', 'booked', 'checked_in', 'in_consultation']
+  const activeBooking = (Array.isArray(bookings) ? bookings : []).find(b => activeStatuses.includes(String(b?.status || '').toLowerCase())) ||
+    (isEligibleBooking(activeToken) ? activeToken : null)
+
+  // If patient has no active booking, display a clean empty state rather than fabricating mock data
+  if (!activeBooking) {
+    return (
+      <div className="live-queue-tracking-container">
+        <div className="page-header-row">
+          <div className="title-with-icon">
+            <Activity size={24} className="text-primary-blue" />
+            <div>
+              <h1 className="page-main-title">Live Queue Compass</h1>
+              <p className="page-main-sub">Real-time OPD queue status and token tracker</p>
+            </div>
+          </div>
+          <div className="header-actions-group">
+            <button type="button" className="refresh-queue-btn" onClick={() => refreshBookings?.()}>
+              <RefreshCw size={14} />
+              <span>Refresh</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="empty-queue-card bg-white rounded-3xl p-10 text-center max-w-lg mx-auto border border-slate-200 shadow-sm mt-8 space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mx-auto shadow-inner">
+            <Ticket size={32} />
+          </div>
+          <div className="space-y-1">
+            <h3 className="text-lg font-bold text-slate-900">No Active OPD Token</h3>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              You do not have an active appointment or waiting queue token for today. Book an OPD appointment or check in at the hospital reception to track your live place in line.
+            </p>
+          </div>
+          <div className="pt-2">
+            <button
+              onClick={() => onNavigate?.('book')}
+              className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-blue-500/20 transition inline-flex items-center gap-2 cursor-pointer"
+            >
+              <span>Book OPD Token</span>
+              <ArrowRight size={14} />
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const tokenNumber = activeBooking?.token_number || activeBooking?.id || 'T-001'
+  const hospitalName = activeBooking?.hospital_name || (typeof activeBooking?.hospital === 'object' ? activeBooking.hospital?.name : activeBooking?.hospital) || 'Hospital OPD'
+  const hospitalCity = activeBooking?.hospital_city || (typeof activeBooking?.hospital === 'object' ? activeBooking.hospital?.city : activeBooking?.city) || ''
+  const departmentName = activeBooking?.department_name || (typeof activeBooking?.department === 'object' ? activeBooking.department?.name : activeBooking?.department) || 'OPD'
+  const doctorName = activeBooking?.doctor_name || (typeof activeBooking?.doctor === 'object' ? activeBooking.doctor?.display_name : activeBooking?.doctor) || 'Consulting Specialist'
+  const opdRoom = activeBooking?.doctor_room || activeBooking?.room || 'OPD Consultation Room'
 
   // Parse user's token prefix & number (e.g., "A-025" -> prefix "A-", num 25)
   const { tokenPrefix, userTokenNum } = useMemo(() => {
@@ -53,6 +107,32 @@ export function LiveQueueTracking({
     return () => clearInterval(timer)
   }, [])
 
+  // Phase 4: Live Server-Sent Events (SSE) queue subscription
+  const [liveStreamData, setLiveStreamData] = useState(null)
+  const [streamMode, setStreamMode] = useState('connecting')
+  const [activeAlert, setActiveAlert] = useState(null)
+
+  useEffect(() => {
+    if (!activeBooking?.id) return
+    const sub = createSseQueueSubscriber({
+      path: `/patient/queue/stream/?booking_id=${encodeURIComponent(activeBooking.id)}`,
+      onUpdate: (streamPayload) => {
+        setLiveStreamData(streamPayload)
+        setStreamMode('sse')
+      },
+      onNotification: (notif) => {
+        setActiveAlert(notif)
+      },
+      onError: () => {
+        setStreamMode('polling')
+      },
+    })
+    return () => sub.close()
+  }, [activeBooking?.id])
+
+  const doctorDelayMinutes = liveStreamData?.doctor?.delay_minutes || 0
+  const doctorDelayReason = liveStreamData?.doctor?.delay_reason || ''
+
   const formatTimer = (secs) => {
     const m = Math.floor(secs / 60)
     const s = secs % 60
@@ -62,13 +142,25 @@ export function LiveQueueTracking({
   // Format token helper
   const formatToken = (num) => `${tokenPrefix}${String(num).padStart(3, '0')}`
 
-  // Key derived metrics
-  const currentDoctorToken = formatToken(currentServingNum)
-  const isUserTurn = currentServingNum === userTokenNum
-  const isUserPast = currentServingNum > userTokenNum
-  const patientsAhead = Math.max(0, userTokenNum - currentServingNum)
+  // Derive server-reported serving token or fall back to sequence
+  const nowServingRaw = liveStreamData?.now_serving
+  const matchServing = typeof nowServingRaw === 'string' ? nowServingRaw.match(/^([A-Za-z]+-?)?(\d+)$/) : null
+  const serverServingNum = matchServing ? parseInt(matchServing[2], 10) : null
+
+  const effectiveServingNum = serverServingNum !== null ? serverServingNum : currentServingNum
+  const currentDoctorToken = nowServingRaw && nowServingRaw !== '—' && nowServingRaw !== '-' 
+    ? nowServingRaw 
+    : formatToken(effectiveServingNum)
+
+  const isUserTurn = activeBooking.status === 'serving' || effectiveServingNum === userTokenNum
+  const isUserPast = activeBooking.status === 'completed' || effectiveServingNum > userTokenNum
+  const patientsAhead = liveStreamData?.position_ahead !== undefined 
+    ? liveStreamData.position_ahead 
+    : Math.max(0, userTokenNum - effectiveServingNum)
   const previousSeatsCount = Math.max(0, patientsAhead - 1)
-  const estimatedWait = patientsAhead * 2 // ~2 mins per checkup
+  const estimatedWait = liveStreamData?.estimated_wait_minutes !== undefined
+    ? liveStreamData.estimated_wait_minutes
+    : (activeBooking.estimated_wait_minutes ?? Math.max(0, patientsAhead * 10))
 
   // Generate the full sequence of allotment seats in the doctor's queue
   const queueAllotments = useMemo(() => {
@@ -150,16 +242,12 @@ export function LiveQueueTracking({
     return queueAllotments
   }, [queueAllotments, filterTab])
 
-  // Interactive simulation: doctor finishes one patient and calls next
-  const handleSimulateNextToken = () => {
-    if (currentServingNum < userTokenNum + 4) {
-      setCurrentServingNum(prev => prev + 1)
-      setConsultationSeconds(0)
-    }
-  }
-
   const handleCancel = async () => {
     if (!activeBooking?.id) return
+    if (!['waiting', 'arrived', 'confirmed', 'booked'].includes(activeBooking.status)) {
+      setCancelMessage('This appointment cannot be cancelled because your consultation is in progress or completed.')
+      return
+    }
     if (!window.confirm('Are you sure you want to cancel this OPD appointment? Hospital refund policy will be applied.')) return
     setCancelling(true)
     try {
@@ -187,7 +275,22 @@ export function LiveQueueTracking({
         <div className="title-with-icon">
           <Activity size={24} className="text-primary-blue" />
           <div>
-            <h1 className="page-main-title">Live Queue Compass</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="page-main-title">Live Queue Compass</h1>
+              {activeBooking?.id && (
+                <span
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold border ${
+                    streamMode === 'sse'
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : 'bg-amber-50 text-amber-700 border-amber-200'
+                  }`}
+                  title={streamMode === 'sse' ? 'Connected via real-time Server-Sent Events' : 'Using active interval polling fallback'}
+                >
+                  <span className={`w-2 h-2 rounded-full ${streamMode === 'sse' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+                  {streamMode === 'sse' ? 'Live Stream (SSE)' : 'Live Polling'}
+                </span>
+              )}
+            </div>
             <p className="page-main-sub">
               Real-time OPD queue board for <strong>{hospitalName}</strong>, {hospitalCity}
             </p>
@@ -195,22 +298,53 @@ export function LiveQueueTracking({
         </div>
 
         <div className="header-actions-group">
-          <button
-            type="button"
-            className="btn-simulate-call-token"
-            onClick={handleSimulateNextToken}
-            title="Simulate doctor completing current patient and calling next"
-          >
-            <Play size={13} />
-            <span>Simulate Call Next</span>
-          </button>
-
           <button type="button" className="refresh-queue-btn" onClick={() => refreshBookings?.()}>
             <RefreshCw size={14} />
             <span>Refresh Queue</span>
           </button>
         </div>
       </div>
+
+      {/* Instant Notification Popup Banner */}
+      {activeAlert && (
+        <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-2xl flex items-start justify-between gap-3 shadow-md mb-4 text-emerald-950">
+          <div className="flex items-start gap-3">
+            <Bell size={20} className="text-emerald-600 mt-0.5 shrink-0" />
+            <div>
+              <strong className="text-xs font-bold block">{activeAlert.title}</strong>
+              <p className="text-xs text-emerald-800">{activeAlert.message}</p>
+            </div>
+          </div>
+          <button onClick={() => setActiveAlert(null)} className="text-emerald-700 hover:text-emerald-900 font-bold text-sm">&times;</button>
+        </div>
+      )}
+
+      {/* Emergency Doctor Delay Banner */}
+      {doctorDelayMinutes > 0 && (
+        <div className="p-4 bg-amber-50 border border-amber-300 rounded-2xl flex items-start gap-3 shadow-sm mb-4 text-amber-950">
+          <AlertTriangle size={20} className="text-amber-600 shrink-0 mt-0.5" />
+          <div className="text-xs space-y-0.5">
+            <strong className="text-xs font-bold block">Doctor Schedule Delay: +{doctorDelayMinutes} minutes</strong>
+            <p className="text-amber-800">
+              Dr. {doctorName} has notified a delay{doctorDelayReason ? ` due to ${doctorDelayReason}` : ''}.
+              Your estimated consultation time has been adaptively updated.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Your Turn Is Near Banner */}
+      {patientsAhead <= 3 && patientsAhead > 0 && (
+        <div className="p-4 bg-blue-50 border border-blue-200 rounded-2xl flex items-start gap-3 shadow-sm mb-4 text-blue-950 animate-pulse">
+          <Sparkles size={20} className="text-blue-600 shrink-0 mt-0.5" />
+          <div className="text-xs space-y-0.5">
+            <strong className="text-xs font-bold block">Your Turn Is Near! ({patientsAhead} patient{patientsAhead > 1 ? 's' : ''} ahead)</strong>
+            <p className="text-blue-800">
+              Please proceed to {opdRoom}. Dr. {doctorName} will call your Token #{tokenNumber} shortly.
+            </p>
+          </div>
+        </div>
+      )}
 
       {cancelMessage && (
         <div className="info-banner" role="status">
@@ -249,9 +383,10 @@ export function LiveQueueTracking({
                 🩺 Patient with {doctorName}
               </span>
             </div>
-            <p className="examining-doctor-sub">
-              Specialist: <strong>{doctorName}</strong> · Department: <strong>{departmentName}</strong>
-            </p>
+            <div className="flex items-center gap-2 mt-2 flex-wrap">
+              <span className="badge-highlight-dept">🏥 {departmentName}</span>
+              <span className="badge-highlight-doctor">👨‍⚕️ {doctorName}</span>
+            </div>
           </div>
 
           <div className="consultation-timer-box">
@@ -294,9 +429,10 @@ export function LiveQueueTracking({
             <p className="token-facility-sub">
               Facility: <strong>{hospitalName}</strong> · City: <strong>{hospitalCity}</strong>
             </p>
-            <p className="token-doctor-sub">
-              OPD: <strong>{departmentName}</strong> · Consulting: <strong>{doctorName}</strong>
-            </p>
+            <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+              <span className="badge-highlight-dept">🏥 {departmentName}</span>
+              <span className="badge-highlight-doctor">👨‍⚕️ {doctorName}</span>
+            </div>
           </div>
 
           {/* Quick Metrics */}
@@ -507,15 +643,17 @@ export function LiveQueueTracking({
           <span>View Hospital Location & Directions</span>
         </button>
 
-        <button
-          type="button"
-          className="btn-cancel-token"
-          onClick={handleCancel}
-          disabled={cancelling}
-        >
-          <XCircle size={16} />
-          <span>{cancelling ? 'Cancelling…' : 'Cancel Appointment'}</span>
-        </button>
+        {['waiting', 'arrived', 'confirmed', 'booked'].includes(activeBooking?.status) && (
+          <button
+            type="button"
+            className="btn-cancel-token"
+            onClick={handleCancel}
+            disabled={cancelling}
+          >
+            <XCircle size={16} />
+            <span>{cancelling ? 'Cancelling…' : 'Cancel Appointment'}</span>
+          </button>
+        )}
       </div>
     </div>
   )
