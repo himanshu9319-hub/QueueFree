@@ -1,13 +1,13 @@
 {
   "planHash": "802cba922eefafd62dfa7ddf870810010bc6f247f970224059e7caef8b7d8ca9",
   "phase": "standalone",
-  "recordedAtUtc": "2026-10-29T11:29:45.3165913Z",
+  "recordedAtUtc": "2026-11-01T06:47:51.8711138Z",
   "retryCount": 0,
   "resetBaseline": false,
   "complete": true,
   "result": {
     "setupSucceeded": true,
-    "setupDurationMs": 35496,
+    "setupDurationMs": 18391,
     "setupFailureOutput": null,
     "assertions": [
       {
@@ -19,8 +19,8 @@
         "skipped": false,
         "skippedReason": null,
         "exitCode": 0,
-        "outputSample": "\r\n\u003E queuefree@1.0.0 build\r\n\u003E vite build\r\n\r\n\u001B[36mvite v8.3.5 \u001B[32mbuilding client environment for production...\u001B[36m\u001B[39m\r\ntransforming...\r\n\u2713 1585 modules transformed.\r\nrendering chunks...\r\ncomputing gzip size...\r\ndist/index.html                      0.61 kB \u2502 gzip:  0.38 kB\r\ndist/assets/index-2x8OWXz4.css      55.78 kB \u2502 gzip: 12.29 kB\r\ndist/assets/MapCanvas-DA4uJyWq.js    5.40 kB \u2502 gzip:  2.29 kB\r\ndist/assets/index-BwmvoD31.js      296.67 kB \u2502 gzip: 91.00 kB\r\n\r\n\u001B[32m\u2713 built in 606ms\u001B[39m\r\n",
-        "durationMs": 2258
+        "outputSample": "\r\n\u003E queuefree@1.0.0 build\r\n\u003E vite build\r\n\r\n\u001B[36mvite v8.3.5 \u001B[32mbuilding client environment for production...\u001B[36m\u001B[39m\r\ntransforming...\r\n\u2713 2033 modules transformed.\r\nrendering chunks...\r\ncomputing gzip size...\r\ndist/index.html                               1.20 kB \u2502 gzip:   0.58 kB\r\ndist/assets/super-admin-bg-CeROS2R3.png     121.58 kB\r\ndist/assets/reception-bg-DkRdI3S6.png       137.47 kB\r\ndist/assets/hospital-admin-bg-hXFsie1A.png  246.35 kB\r\ndist/assets/doctor-bg-Dl-cAHd_.png          309.91 kB\r\ndist/assets/index-jdEHthkI.css              253.23 kB \u2502 gzip:  44.54 kB\r\ndist/assets/MapCanvas-INdXem3w.js             5.40 kB \u2502 gzip:   2.29 kB\r\ndist/assets/index-Cadyfr5w.js               847.75 kB \u2502 gzip: 232.32 kB\r\n\r\n\u001B[33m[plugin builtin:vite-reporter] \r\n(!) Some chunks are larger than 500 kB after minification. Consider:\r\n- Using dynamic import() to code-split the application\r\n- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting\r\n- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.\u001B[39m\r\n\u001B[32m\u2713 built in 1.09s\u001B[39m\r\n",
+        "durationMs": 2546
       },
       {
         "name": "tests-pass",
@@ -31,13 +31,13 @@
         "skipped": false,
         "skippedReason": null,
         "exitCode": 0,
-        "outputSample": "\r\n\u003E queuefree@1.0.0 test\r\n\u003E vitest run\r\n\r\n\r\n RUN  v5.0.5 C:/Users/acer/Documents/Codex/2026-10-27/https-abha-queue-compass-lovable-app\r\n\r\n\r\n Test Files  1 passed (1)\r\n      Tests  3 passed (3)\r\n   Start at  16:59:43\r\n   Duration  427ms (import 51%, transform 39%, worker 7%, tests 4%)\r\n\r\n",
-        "durationMs": 1883,
+        "outputSample": "\r\n\u003E queuefree@1.0.0 test\r\n\u003E vitest run\r\n\r\n\r\n RUN  v5.0.5 C:/Users/acer/Documents/Codex/2026-10-27/https-abha-queue-compass-lovable-app\r\n\r\n\r\n Test Files  1 passed (1)\r\n      Tests  7 passed (7)\r\n   Start at  12:17:48\r\n   Duration  406ms (transform 42%, import 36%, tests 18%, worker 4%)\r\n\r\n",
+        "durationMs": 1982,
         "testResults": {
           "testFramework": "vitest",
           "runnerDetectedFrom": "package_json",
-          "testsTotal": 3,
-          "testsPassed": 3,
+          "testsTotal": 7,
+          "testsPassed": 7,
           "testsFailed": 0,
           "testsSkipped": 0,
           "parseFailed": false
@@ -52,8 +52,8 @@
         "skipped": false,
         "skippedReason": null,
         "exitCode": null,
-        "outputSample": "HTTP 200\n\u003C!doctype html\u003E\n\u003Chtml lang=\u0022en\u0022\u003E\n  \u003Chead\u003E\n    \u003Cscript type=\u0022module\u0022\u003Eimport { injectIntoGlobalHook } from \u0022/@react-refresh\u0022;\ninjectIntoGlobalHook(window);\nwindow.$RefreshReg$ = () =\u003E {};\nwindow.$RefreshSig$ = () =\u003E (type) =\u003E type;\u003C/script\u003E\n\n    \u003Cscript type=\u0022module\u0022 src=\u0022/@vite/client\u0022\u003E\u003C/script\u003E\n\n    \u003Cmeta charset=\u0022UTF-8\u0022 /\u003E\n    \u003Cmeta name=\u0022viewport\u0022 content=\u0022width=device-width, initial-scale=1.0\u0022 /\u003E\n    \u003Cmeta name=\u0022theme-color\u0022 content=\u0022#f7f9fc\u0022 /\u003E\n    \u003Cmeta name=\u0022description\u0022 content=\u0022Book your hospital OPD token, track the live queue, and arrive just before your turn with QueueFree.\u0022 /\u003E\n    \u003Ctitle\u003EQueueFree \u2014 Skip the line, save your time.\u003C/title\u003E\n  \u003C/head\u003E\n  \u003Cbody\u003E\u003Cdiv id=\u0022root\u0022\u003E\u003C/div\u003E\u003Cscript type=\u0022module\u0022 src=\u0022/src/main.jsx\u0022\u003E\u003C/script\u003E\u003C/body\u003E\n\u003C/html\u003E\n\n--- server output ---\n\r\n\u003E queuefree@1.0.0 dev\r\n\u003E vite --host 127.0.0.1\r\n\r\n\r\n  \u001B[32m\u001B[1mVITE\u001B[22m v8.3.5\u001B[39m  \u001B[2mready in \u001B[0m\u001B[1m683\u001B[22m\u001B[2m\u001B[0m ms\u001B[22m\r\n\r\n  \u001B[32m\u279C\u001B[39m  \u001B[1mLocal\u001B[22m:   \u001B[36mhttp://127.0.0.1:\u001B[1m5173\u001B[22m/\u001B[39m\r\n",
-        "durationMs": 1745
+        "outputSample": "HTTP 200\n\u003C!doctype html\u003E\n\u003Chtml lang=\u0022en\u0022\u003E\n  \u003Chead\u003E\n    \u003Cscript type=\u0022module\u0022\u003Eimport { injectIntoGlobalHook } from \u0022/@react-refresh\u0022;\ninjectIntoGlobalHook(window);\nwindow.$RefreshReg$ = () =\u003E {};\nwindow.$RefreshSig$ = () =\u003E (type) =\u003E type;\u003C/script\u003E\n\n    \u003Cscript type=\u0022module\u0022 src=\u0022/@vite/client\u0022\u003E\u003C/script\u003E\n\n    \u003Cmeta charset=\u0022UTF-8\u0022 /\u003E\n    \u003Cmeta name=\u0022viewport\u0022 content=\u0022width=device-width, initial-scale=1.0\u0022 /\u003E\n    \u003Cmeta name=\u0022theme-color\u0022 content=\u0022#2563eb\u0022 /\u003E\n    \u003Cmeta name=\u0022description\u0022 content=\u0022Book OPD appointments online, track your hospital queue in real time and save valuable waiting time with QueueFree.\u0022 /\u003E\n    \u003Cmeta property=\u0022og:title\u0022 content=\u0022QueueFree \u2014 Skip the Line. Save Your Time.\u0022 /\u003E\n    \u003Cmeta property=\u0022og:description\u0022 content=\u0022Book OPD appointments online, track your hospital queue in real time and save valuable waiting time with QueueFree.\u0022 /\u003E\n    \u003Cmeta property=\u0022og:type\u0022 content=\u0022website\u0022 /\u003E\n    \u003Ctitle\u003EQueueFree \u2014 Skip the Line. Save Your Time.\u003C/title\u003E\n    \u003Clink rel=\u0022icon\u0022 type=\u0022image/svg\u002Bxml\u0022 href=\u0022data:image/svg\u002Bxml,\u003Csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 viewBox=\u00270 0 24 24\u0027 fill=\u0027none\u0027 stroke=\u0027%232563eb\u0027 stroke-width=\u00272.5\u0027 stroke-linecap=\u0027round\u0027 stroke-linejoin=\u0027round\u0027\u003E\u003Cpath d=\u0027M22 12h-4l-3 9L9 3l-3 9H2\u0027/\u003E\u003C/svg\u003E\u0022 /\u003E\n  \u003C/head\u003E\n  \u003Cbody\u003E\u003Cdiv id=\u0022root\u0022\u003E\u003C/div\u003E\u003Cscript type=\u0022module\u0022 src=\u0022/src/main.jsx\u0022\u003E\u003C/script\u003E\u003C/body\u003E\n\u003C/html\u003E\n\n--- server output ---\n\r\n\u003E queuefree@1.0.0 dev\r\n\u003E vite --host 127.0.0.1\r\n\r\n\r\n  \u001B[32m\u001B[1mVITE\u001B[22m v8.3.5\u001B[39m  \u001B[2mready in \u001B[0m\u001B[1m557\u001B[22m\u001B[2m\u001B[0m ms\u001B[22m\r\n\r\n  \u001B[32m\u279C\u001B[39m  \u001B[1mLocal\u001B[22m:   \u001B[36mhttp://127.0.0.1:\u001B[1m5173\u001B[22m/\u001B[39m\r\n",
+        "durationMs": 2283
       }
     ],
     "executions": [
